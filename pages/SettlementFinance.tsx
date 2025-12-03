@@ -4,69 +4,16 @@ import {
   DollarSign, X, ShieldCheck, TrendingUp, Lock, Globe, Building2, 
   Search, Filter, ChevronRight, ArrowRight, Wallet, PieChart as PieIcon,
   RefreshCw, Landmark, MoreHorizontal, CreditCard, Plus, Save, ChevronDown,
-  ArrowUpRight, ArrowDownRight, RotateCcw
+  ArrowUpRight, ArrowDownRight, RotateCcw, UserCheck
 } from 'lucide-react';
 import { 
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend 
 } from 'recharts';
-import { UserRole } from '../types';
+import { UserRole, Invoice, PaymentBatch } from '../types';
+import { MOCK_INVOICES, MOCK_BATCHES } from '../constants';
 
 // --- MOCK DATA & TYPES ---
-
-interface ExtendedPaymentBatch {
-  id: string;
-  runDate: string;
-  entity: string;
-  bankAccount: string;
-  currency: string;
-  amount: number;
-  invoiceCount: number;
-  discountAvailable: number;
-  status: 'DRAFT' | 'AWAITING_APPROVAL' | 'APPROVED' | 'SENT_TO_BANK' | 'PAID' | 'REJECTED';
-  riskScore: 'LOW' | 'MEDIUM' | 'HIGH';
-  nextApprover?: string;
-}
-
-const EXTENDED_BATCHES: ExtendedPaymentBatch[] = [
-  {
-    id: 'PY-2025-11-24-001',
-    runDate: '2025-11-24',
-    entity: 'Hitachi Energy USA',
-    bankAccount: 'JPM-8829 (USD)',
-    currency: 'USD',
-    amount: 1250450.00,
-    invoiceCount: 145,
-    discountAvailable: 12500.00,
-    status: 'SENT_TO_BANK',
-    riskScore: 'LOW',
-  },
-  {
-    id: 'PY-2025-11-25-002',
-    runDate: '2025-11-25',
-    entity: 'Hitachi Energy Canada',
-    bankAccount: 'RBC-9921 (CAD)',
-    currency: 'CAD',
-    amount: 450000.00,
-    invoiceCount: 42,
-    discountAvailable: 0,
-    status: 'AWAITING_APPROVAL',
-    riskScore: 'LOW',
-    nextApprover: 'William Carswell'
-  },
-  {
-    id: 'PY-2025-11-25-003',
-    runDate: '2025-11-25',
-    entity: 'Hitachi Energy EU',
-    bankAccount: 'DB-1120 (EUR)',
-    currency: 'EUR',
-    amount: 850000.00,
-    invoiceCount: 89,
-    discountAvailable: 4200.00,
-    status: 'DRAFT',
-    riskScore: 'MEDIUM',
-  }
-];
 
 // Vendor Remittance Data
 const VENDOR_REMITTANCES = [
@@ -144,9 +91,10 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
   const [expandedRemittance, setExpandedRemittance] = useState<string | null>(null);
 
   // INTERNAL STATE
-  const [batches, setBatches] = useState<ExtendedPaymentBatch[]>(EXTENDED_BATCHES);
+  const [batches, setBatches] = useState<PaymentBatch[]>(MOCK_BATCHES);
   const [reconData, setReconData] = useState(RECONCILIATION_DATA);
-  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  const [selectedBatch, setSelectedBatch] = useState<PaymentBatch | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [showNewRunModal, setShowNewRunModal] = useState(false);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
@@ -208,25 +156,31 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
     }, 1500);
   };
 
+  const handleBatchSelect = (batch: PaymentBatch) => {
+    setSelectedBatch(batch);
+    setIsDetailModalOpen(true);
+  };
+
   const handleApproveClick = (id: string) => {
-    setSelectedBatchId(id);
+    setIsDetailModalOpen(false); // Close detail modal first
+    setSelectedBatch(batches.find(b => b.id === id) || null);
     setShowApprovalModal(true);
   };
 
   const confirmApproval = () => {
     setIsProcessing(true);
     setTimeout(() => {
-      setBatches(prev => prev.map(b => b.id === selectedBatchId ? { ...b, status: 'SENT_TO_BANK' } : b));
+      setBatches(prev => prev.map(b => b.id === selectedBatch?.id ? { ...b, status: 'SENT_TO_BANK' } : b));
       setIsProcessing(false);
       setShowApprovalModal(false);
-      setSelectedBatchId(null);
+      setSelectedBatch(null);
       triggerToast("Payment Batch authorized and transmitted to Bank.");
     }, 2000);
   };
 
   const handleCreateRun = () => {
     // Add new dummy batch
-    const newBatch: ExtendedPaymentBatch = {
+    const newBatch: PaymentBatch = {
       id: `PY-${newRunForm.runDate}-${Math.floor(Math.random() * 1000)}`,
       runDate: newRunForm.runDate,
       entity: newRunForm.entity,
@@ -236,7 +190,10 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
       invoiceCount: 0,
       discountAvailable: 0,
       status: 'DRAFT',
-      riskScore: 'LOW'
+      riskScore: 'LOW',
+      invoiceIds: [],
+      paymentTerms: 'Net 30',
+      sanctionStatus: 'PENDING'
     };
     setBatches([newBatch, ...batches]);
     setShowNewRunModal(false);
@@ -244,7 +201,7 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
   };
 
   const handleApplyDiscount = () => {
-    triggerToast("Optimization Applied: $12,500 early payment discount secured.");
+    triggerToast("Optimization Applied: $125.00 early payment discount secured.");
     setBatches(prev => {
        const newB = [...prev];
        if(newB[0]) newB[0].riskScore = 'LOW'; 
@@ -436,8 +393,8 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
                   <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Pending Approvals</p>
                   <Clock size={18} className="text-orange-500" />
                </div>
-               <h3 className="text-3xl font-bold text-gray-900">$1.2M</h3>
-               <p className="text-[10px] text-gray-400 mt-1">3 Batches Queued</p>
+               <h3 className="text-3xl font-bold text-gray-900">$2.7k</h3>
+               <p className="text-[10px] text-gray-400 mt-1">1 Batch Queued</p>
             </div>
             <div className="bg-white p-5 rounded-sm border border-gray-200 shadow-sm">
                <div className="flex justify-between items-start mb-2">
@@ -558,7 +515,7 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
                      <tbody className="divide-y divide-gray-100">
                         {filteredBatches.length > 0 ? (
                            filteredBatches.map((batch) => (
-                           <tr key={batch.id} className="hover:bg-teal-50/20 transition-colors group">
+                           <tr key={batch.id} className="hover:bg-teal-50/20 transition-colors group cursor-pointer" onClick={() => handleBatchSelect(batch)}>
                               <td className="px-6 py-4 font-mono text-xs font-bold text-teal-700">{batch.id}</td>
                               <td className="px-6 py-4 text-gray-600">{batch.runDate}</td>
                               <td className="px-6 py-4">
@@ -577,16 +534,9 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
                                  {batch.status === 'DRAFT' && <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded border border-gray-200">DRAFT</span>}
                               </td>
                               <td className="px-6 py-4 text-right">
-                                 {batch.status === 'AWAITING_APPROVAL' ? (
-                                    <button 
-                                       onClick={() => handleApproveClick(batch.id)}
-                                       className="text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 px-3 py-1.5 rounded-sm shadow-sm"
-                                    >
-                                       Approve
-                                    </button>
-                                 ) : (
-                                    <button className="text-gray-400 hover:text-teal-600"><MoreHorizontal size={18}/></button>
-                                 )}
+                                 <button className="text-gray-400 group-hover:text-teal-600 transition-colors">
+                                    <ChevronRight size={18}/>
+                                 </button>
                               </td>
                            </tr>
                         ))
@@ -662,11 +612,11 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
                      <h3 className="text-lg font-bold text-teal-800 flex items-center">
                         <DollarSign size={20} className="mr-2" /> Dynamic Discounting
                      </h3>
-                     <p className="text-sm text-teal-600 mt-1">12 Invoices eligible for early payment (2% / 10 Net 30)</p>
+                     <p className="text-sm text-teal-600 mt-1">1 Batch eligible for early payment (2% / 10 Net 30)</p>
                   </div>
                   <div className="text-right">
                      <p className="text-xs font-bold text-gray-500 uppercase">Potential Savings</p>
-                     <p className="text-2xl font-bold text-gray-900">$12,500.00</p>
+                     <p className="text-2xl font-bold text-gray-900">$125.00</p>
                   </div>
                   <button 
                      onClick={handleApplyDiscount}
@@ -731,7 +681,17 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
 
       {/* --- MODALS --- */}
       
-      {/* 1. Approval Modal */}
+      {/* 1. Batch Detail Modal */}
+      {isDetailModalOpen && selectedBatch && (
+        <BatchDetailModal 
+          batch={selectedBatch}
+          onClose={() => setIsDetailModalOpen(false)}
+          onApprove={() => handleApproveClick(selectedBatch.id)}
+          onDownloadVoucher={(voucherId) => triggerToast(`Downloading ${voucherId}.pdf...`)}
+        />
+      )}
+
+      {/* 2. Approval Modal */}
       {showApprovalModal && (
          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white w-full max-w-md rounded-sm shadow-2xl p-6">
@@ -740,12 +700,12 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
                   <h3 className="text-xl font-bold text-gray-900">Authorize Payment</h3>
                </div>
                <p className="text-sm text-gray-600 mb-6">
-                  You are approving Batch <span className="font-bold font-mono">{selectedBatchId}</span> for release to the banking network. 
+                  You are approving Batch <span className="font-bold font-mono">{selectedBatch?.id}</span> for release to the banking network. 
                   This action utilizes your Digital Signature (ID: WC-9921).
                </p>
                <div className="bg-gray-50 p-4 border border-gray-200 rounded-sm mb-6 text-xs text-gray-500">
-                  <p className="flex justify-between mb-1"><span>Total Amount:</span> <span className="font-bold text-gray-900">$450,000.00</span></p>
-                  <p className="flex justify-between"><span>Beneficiaries:</span> <span className="font-bold text-gray-900">12 Vendors</span></p>
+                  <p className="flex justify-between mb-1"><span>Total Amount:</span> <span className="font-bold text-gray-900">${selectedBatch?.amount.toLocaleString()}</span></p>
+                  <p className="flex justify-between"><span>Beneficiaries:</span> <span className="font-bold text-gray-900">{selectedBatch?.invoiceCount} Vendors</span></p>
                </div>
                <div className="flex justify-end space-x-3">
                   <button onClick={() => setShowApprovalModal(false)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-sm">Cancel</button>
@@ -761,7 +721,7 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
          </div>
       )}
 
-      {/* 2. New Run Modal */}
+      {/* 3. New Run Modal */}
       {showNewRunModal && (
          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white w-full max-w-lg rounded-sm shadow-2xl overflow-hidden">
@@ -824,6 +784,100 @@ export const SettlementFinance: React.FC<SettlementFinanceProps> = ({ userRole =
          </div>
       )}
 
+    </div>
+  );
+};
+
+
+// --- BATCH DETAIL MODAL COMPONENT ---
+
+interface BatchDetailModalProps {
+  batch: PaymentBatch;
+  onClose: () => void;
+  onApprove: () => void;
+  onDownloadVoucher: (voucherId: string) => void;
+}
+
+const BatchDetailModal: React.FC<BatchDetailModalProps> = ({ batch, onClose, onApprove, onDownloadVoucher }) => {
+  const batchInvoices = MOCK_INVOICES.filter(inv => batch.invoiceIds.includes(inv.id));
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fadeIn backdrop-blur-sm">
+      <div className="bg-gray-50 w-full max-w-5xl h-[90vh] rounded-lg shadow-2xl flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="bg-white px-6 py-4 border-b border-gray-200 flex justify-between items-center flex-shrink-0">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">Payment Batch Details</h2>
+            <p className="text-sm font-mono text-teal-600">{batch.id}</p>
+          </div>
+          <div className="flex items-center space-x-3">
+            {batch.status === 'AWAITING_APPROVAL' && (
+              <button onClick={onApprove} className="px-4 py-2 text-sm font-bold bg-orange-600 text-white hover:bg-orange-700 rounded-sm shadow-sm">
+                Approve Batch
+              </button>
+            )}
+            <button onClick={onClose} className="p-2 text-gray-400 hover:bg-gray-100 rounded-full"><X size={20}/></button>
+          </div>
+        </div>
+
+        {/* Summary Cards */}
+        <div className="p-6 grid grid-cols-3 gap-6 flex-shrink-0 bg-white border-b border-gray-200">
+          <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
+            <p className="text-xs font-bold text-gray-400 uppercase">Payment Terms</p>
+            <p className="text-lg font-bold text-gray-800 mt-1">{batch.paymentTerms}</p>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
+            <p className="text-xs font-bold text-gray-400 uppercase">Sanction Screening</p>
+            <p className={`text-lg font-bold mt-1 flex items-center ${batch.sanctionStatus === 'PASSED' ? 'text-green-600' : 'text-orange-500'}`}>
+              <ShieldCheck size={18} className="mr-2"/> {batch.sanctionStatus}
+            </p>
+          </div>
+          <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
+            <p className="text-xs font-bold text-gray-400 uppercase">Approval Status</p>
+            <p className="text-lg font-bold text-gray-800 mt-1 flex items-center">
+              <UserCheck size={18} className="mr-2 text-gray-400"/>
+              {batch.status === 'AWAITING_APPROVAL' ? `Pending - ${batch.nextApprover}` : batch.status.replace('_', ' ')}
+            </p>
+          </div>
+        </div>
+        
+        {/* Invoice Table */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <table className="w-full text-sm text-left">
+            <thead className="sticky top-0 bg-gray-100 z-10">
+              <tr className="text-xs text-gray-500 uppercase font-bold">
+                <th className="px-6 py-3">GL Code</th>
+                <th className="px-6 py-3">Carrier</th>
+                <th className="px-6 py-3 text-right">Amount</th>
+                <th className="px-6 py-3">Due Date</th>
+                <th className="px-6 py-3">Voucher Details</th>
+                <th className="px-6 py-3 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-100">
+              {batchInvoices.map(inv => {
+                const voucherId = `VOUCH-${inv.id}`;
+                return (
+                  <tr key={inv.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 font-mono text-xs">{inv.glSegments?.[0]?.code || 'N/A'}</td>
+                    <td className="px-6 py-4 font-medium text-gray-800">{inv.carrier}</td>
+                    <td className="px-6 py-4 text-right font-mono text-gray-800">${inv.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}</td>
+                    <td className="px-6 py-4 text-gray-600">{inv.dueDate}</td>
+                    <td className="px-6 py-4 font-mono text-xs text-blue-600">{voucherId}</td>
+                    <td className="px-6 py-4 text-center">
+                      <button 
+                        onClick={() => onDownloadVoucher(voucherId)}
+                        className="p-2 text-gray-400 hover:text-blue-600" title="Download Voucher">
+                        <Download size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 };

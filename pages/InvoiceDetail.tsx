@@ -6,7 +6,7 @@ import {
   ArrowLeft, CheckCircle, XCircle, X, Check, Printer, Download, 
   ShieldCheck, AlertTriangle, FileText, DollarSign, 
   AlertCircle, Clock, Link as LinkIcon, Box, PieChart, Lock,
-  MessageSquare, User, Building2
+  MessageSquare, User, Building2, Cpu, Edit2
 } from 'lucide-react';
 
 interface InvoiceDetailProps {
@@ -343,6 +343,56 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
                  </tbody>
                </table>
              </div>
+
+             {/* --- SMART GL SPLITTER --- */}
+             {invoice.glSegments && (
+                <div className="bg-white border border-gray-100 rounded-sm p-4 shadow-sm">
+                   <div className="flex justify-between items-center mb-2">
+                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center">
+                        <PieChart size={14} className="mr-2"/> Smart GL Splitter
+                     </h3>
+                     <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200 flex items-center">
+                        <Cpu size={10} className="mr-1"/> AI Suggested
+                     </span>
+                   </div>
+                   
+                   {/* Stacked Bar */}
+                   <div className="flex w-full h-4 rounded overflow-hidden my-4 shadow-inner bg-gray-100">
+                     {invoice.glSegments.map(seg => (
+                       <div 
+                         key={seg.code}
+                         style={{ width: `${seg.percentage}%` }}
+                         className={`${seg.color}`}
+                         title={`${seg.segment}: ${seg.percentage}%`}
+                       ></div>
+                     ))}
+                   </div>
+
+                   {/* Legend */}
+                   <ul className="space-y-2 text-xs">
+                     {invoice.glSegments.map(seg => (
+                       <li key={seg.code} className="flex justify-between items-center p-2 bg-gray-50 rounded-sm">
+                         <div className="flex items-center">
+                           <span className={`w-2.5 h-2.5 rounded-full mr-2 ${seg.color}`}></span>
+                           <span className="font-bold text-gray-800">{seg.segment}</span>
+                           <span className="text-gray-500 ml-2 font-mono">{seg.code}</span>
+                         </div>
+                         <div className="font-mono text-gray-900 font-bold">
+                           ${seg.amount.toLocaleString('en-US', {minimumFractionDigits: 2})} 
+                           <span className="text-gray-400 font-sans font-normal ml-1">({seg.percentage}%)</span>
+                         </div>
+                       </li>
+                     ))}
+                   </ul>
+                   
+                   <div className="mt-4 pt-4 border-t border-gray-100 text-right">
+                      <button className="flex items-center ml-auto px-3 py-1.5 rounded-sm text-xs font-bold uppercase border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">
+                         <Edit2 size={12} className="mr-2"/> Override Split
+                      </button>
+                   </div>
+                </div>
+             )}
+
 
              {/* Workflow Steps (Dynamic) */}
              <div>

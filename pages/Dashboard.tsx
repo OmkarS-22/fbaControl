@@ -159,7 +159,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
          {/* Row 1: Charts */}
          <div className="grid grid-cols-3 gap-6">
             {/* Throughput Chart */}
-            <div className="col-span-2 bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+            <div className="col-span-2 bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
                <div className="flex justify-between items-center mb-6">
                   <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider flex items-center">
                      <Activity size={16} className="mr-2 text-teal-600" />
@@ -193,7 +193,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             </div>
 
             {/* Root Cause Donut */}
-            <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+            <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
                <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider mb-2">Exception Root Causes</h3>
                <p className="text-xs text-gray-500 mb-6">Breakdown of current hold queue.</p>
                <div className="h-48 w-full relative">

@@ -36,6 +36,7 @@ export interface Invoice {
   amount: number;
   currency: string;
   date: string;
+  dueDate?: string; // Added for payment terms
   status: InvoiceStatus;
   variance: number; // Positive means overcharge
   reason?: string;
@@ -46,13 +47,14 @@ export interface Invoice {
     delivery: MatchStatus;
     unit: MatchStatus;
   };
-  workflowStep?: 'SCM_REVIEW' | 'TTL_APPROVAL' | 'COMPLETED';
+  workflowStep?: 'SCM_REVIEW' | 'TTL_APPROVAL' | 'COMPLETED' | 'REJECTED';
   assignedTo?: string;
   
   // --- SOLID FEATURES ---
   tmsEstimatedAmount?: number; // The TMS "Planning" Cost
   auditAmount?: number;        // The ATLAS "Actual" Liability
-  source?: 'EDI' | 'API' | 'EMAIL' | 'MANUAL';
+  // FIX: Added 'PORTAL' as a valid source type for an invoice to align with its usage in the mock data.
+  source?: 'EDI' | 'API' | 'EMAIL' | 'MANUAL' | 'PORTAL';
   tmsMatchStatus?: 'LINKED' | 'NOT_FOUND'; // For Ghost Shipments
   sapShipmentRef?: string;
   
@@ -99,11 +101,20 @@ export interface KPI {
 
 export interface PaymentBatch {
   id: string;
-  creationDate: string;
+  runDate: string;
+  entity: string;
+  bankAccount: string;
+  currency: string;
   amount: number;
   invoiceCount: number;
-  status: 'SENT_TO_SAP' | 'PENDING_APPROVAL';
-  scheduledPayDate?: string; // For Cash Flow Optimizer
+  status: 'DRAFT' | 'AWAITING_APPROVAL' | 'APPROVED' | 'SENT_TO_BANK' | 'PAID' | 'REJECTED';
+  riskScore: 'LOW' | 'MEDIUM' | 'HIGH';
+  nextApprover?: string;
+  // Detail Fields
+  invoiceIds: string[];
+  paymentTerms: string;
+  sanctionStatus: 'PASSED' | 'PENDING' | 'FAILED';
+  discountAvailable?: number;
 }
 
 // --- RBAC & WORKFLOW ENGINE TYPES ---

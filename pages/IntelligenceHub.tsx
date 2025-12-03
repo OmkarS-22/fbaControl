@@ -196,7 +196,7 @@ export const IntelligenceHub: React.FC = () => {
     <div className="space-y-6 animate-fade-in-up">
        {/* Row 1: Main Trend & Mode Split */}
        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2 bg-white border border-gray-200 rounded-sm shadow-sm p-6 relative min-w-0">
+          <div className="col-span-2 bg-white border border-gray-200 rounded-sm shadow-sm p-6 relative min-w-0 min-h-0">
              {isLoadingData && (
                 <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">
                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
@@ -231,9 +231,9 @@ export const IntelligenceHub: React.FC = () => {
              </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 flex flex-col min-w-0">
+          <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 flex flex-col min-w-0 min-h-0">
              <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-2">Spend by Mode</h3>
-             <div className="flex-1 min-h-[200px] relative">
+             <div className="h-64 relative">
                 <ResponsiveContainer width="100%" height="100%">
                    <PieChart>
                       <Pie
@@ -270,7 +270,7 @@ export const IntelligenceHub: React.FC = () => {
        </div>
 
        {/* Row 2: Leakage Analysis */}
-       <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+       <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
           <div className="flex justify-between items-center mb-6">
              <div>
                 <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide">Accessorial & Surcharge Impact</h3>
@@ -299,7 +299,7 @@ export const IntelligenceHub: React.FC = () => {
      <div className="space-y-6 animate-fade-in-up">
         <div className="grid grid-cols-2 gap-6">
            {/* Savings by Category */}
-           <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+           <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
               <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-6">Savings by Dispute Category</h3>
               <div className="h-64">
                  <ResponsiveContainer width="100%" height="100%">
@@ -315,7 +315,7 @@ export const IntelligenceHub: React.FC = () => {
            </div>
 
            {/* Recovery Trend */}
-           <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+           <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
               <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide mb-6">Identified vs Recovered</h3>
               <div className="h-64">
                  <ResponsiveContainer width="100%" height="100%">
@@ -372,7 +372,7 @@ export const IntelligenceHub: React.FC = () => {
 
   const renderCostToServe = () => (
      <div className="space-y-6 animate-fade-in-up">
-        <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+        <div className="bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
            <div className="flex justify-between items-center mb-6">
               <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide">Cost Per TEU vs Benchmark</h3>
               <div className="flex items-center space-x-2 text-xs">
@@ -443,7 +443,7 @@ export const IntelligenceHub: React.FC = () => {
 
       {/* Main Quadrant Chart */}
       <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2 bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0">
+        <div className="col-span-2 bg-white border border-gray-200 rounded-sm shadow-sm p-6 min-w-0 min-h-0">
           <div className="flex justify-between items-center mb-6">
             <div>
               <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wide">Performance vs. Cost Matrix</h3>

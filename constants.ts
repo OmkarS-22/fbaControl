@@ -95,6 +95,7 @@ export const MOCK_INVOICES: Invoice[] = [
     amount: 2775.00,
     currency: 'USD',
     date: '2025-11-19',
+    dueDate: '2025-12-19',
     status: InvoiceStatus.APPROVED,
     variance: 0.00,
     reason: '3-Way Match OK',
@@ -127,6 +128,7 @@ export const MOCK_INVOICES: Invoice[] = [
     amount: 2678.00,
     currency: 'USD',
     date: '2025-11-20',
+    dueDate: '2025-12-20',
     status: InvoiceStatus.EXCEPTION,
     variance: 178.00,
     reason: 'Rate Mismatch (>5%)',
@@ -169,6 +171,7 @@ export const MOCK_INVOICES: Invoice[] = [
     amount: 12500.00,
     currency: 'USD',
     date: '2025-11-26',
+    dueDate: '2025-12-26',
     status: InvoiceStatus.EXCEPTION,
     variance: 0.00,
     reason: 'Ghost Shipment (No TMS Link)',
@@ -208,6 +211,7 @@ export const MOCK_INVOICES: Invoice[] = [
     amount: 450.00,
     currency: 'USD',
     date: '2025-11-21',
+    dueDate: '2025-12-21',
     status: InvoiceStatus.APPROVED,
     variance: 0.00,
     reason: 'Czar-Lite Match OK',
@@ -239,6 +243,7 @@ export const MOCK_INVOICES: Invoice[] = [
     amount: 450.00,
     currency: 'USD',
     date: '2025-11-25',
+    dueDate: '2025-12-25',
     status: InvoiceStatus.EXCEPTION,
     variance: 0.00,
     reason: 'Suspect Duplicate (95% Match)',
@@ -264,7 +269,56 @@ export const MOCK_INVOICES: Invoice[] = [
         { actor: 'System', timestamp: '2025-11-25 11:00 AM', action: 'Exception Raised', comment: 'Invoice is a 95% match to existing invoice #LTL-992. Please verify this is not a duplicate.' }
       ]
     }
-  }
+  },
+  // --- NEW INVOICES FOR POLISH ---
+  {
+    id: 'PAID-001',
+    invoiceNumber: 'MSC-881-C',
+    carrier: 'MSC',
+    origin: 'Hamburg, DE',
+    destination: 'Newark, NJ',
+    amount: 4200.00,
+    currency: 'USD',
+    date: '2025-10-15',
+    dueDate: '2025-11-15',
+    status: InvoiceStatus.PAID,
+    variance: 0.00,
+    reason: 'Paid via Batch #PY-2025-10-24',
+    extractionConfidence: 99,
+    workflowStep: 'COMPLETED',
+    tmsEstimatedAmount: 4200.00,
+    auditAmount: 4200.00,
+    source: 'EDI',
+    tmsMatchStatus: 'LINKED',
+    sapShipmentRef: 'SHP-889100-01',
+    lineItems: [ { description: 'Ocean Freight 40HC', amount: 4200.00, expectedAmount: 4200.00 }],
+    matchResults: { rate: MatchStatus.MATCH, delivery: MatchStatus.MATCH, unit: MatchStatus.MATCH },
+    glSegments: [ { code: '101-55', segment: 'Transformers', amount: 4200.00, percentage: 100, color: 'bg-teal-500' } ]
+  },
+  {
+    id: 'REJECTED-001',
+    invoiceNumber: 'REJ-001',
+    carrier: 'Flexport',
+    origin: 'Shanghai, CN',
+    destination: 'Los Angeles, CA',
+    amount: 3500.00,
+    currency: 'USD',
+    date: '2025-11-18',
+    dueDate: '2025-12-18',
+    status: InvoiceStatus.REJECTED,
+    variance: 3500.00,
+    reason: 'Auto-Rejected: No Proof of Delivery',
+    extractionConfidence: 95,
+    workflowStep: 'REJECTED',
+    tmsEstimatedAmount: 3500.00,
+    auditAmount: 0.00, // Liability is 0 until POD
+    source: 'PORTAL',
+    tmsMatchStatus: 'LINKED',
+    sapShipmentRef: 'SHP-889205-01',
+    lineItems: [ { description: 'Freight Charges', amount: 3500.00, expectedAmount: 3500.00 } ],
+    matchResults: { rate: MatchStatus.MATCH, delivery: MatchStatus.MISSING, unit: MatchStatus.MATCH },
+    glSegments: [ { code: '101-20', segment: 'Power Grids', amount: 3500.00, percentage: 100, color: 'bg-blue-500' } ]
+  },
 ];
 
 export const MOCK_RATES: RateCard[] = [
@@ -336,22 +390,50 @@ export const MOCK_PARTNERS = [
   }
 ];
 
-export const PAYMENT_BATCHES: PaymentBatch[] = [
+export const MOCK_BATCHES: PaymentBatch[] = [
   {
-    id: 'PAY-NOV-24',
-    creationDate: '2025-11-24',
-    amount: 450000.00,
-    invoiceCount: 145,
-    status: 'SENT_TO_SAP',
-    scheduledPayDate: '2025-11-25'
+    id: 'PY-2025-11-24-001',
+    runDate: '2025-11-24',
+    entity: 'Hitachi Energy USA',
+    bankAccount: 'JPM-8829 (USD)',
+    currency: 'USD',
+    amount: 7425.00,
+    invoiceCount: 3,
+    discountAvailable: 125.00,
+    status: 'SENT_TO_BANK',
+    riskScore: 'LOW',
+    invoiceIds: ['5467', 'LTL-992', 'PAID-001'],
+    paymentTerms: 'Net 30',
+    sanctionStatus: 'PASSED'
   },
   {
-    id: 'PAY-NOV-25',
-    creationDate: '2025-11-25',
-    amount: 125000.00,
-    invoiceCount: 42,
-    status: 'PENDING_APPROVAL',
-    scheduledPayDate: '2026-01-10' // Held for maturity (Net 45)
+    id: 'PY-2025-11-25-002',
+    runDate: '2025-11-25',
+    entity: 'Hitachi Energy Canada',
+    bankAccount: 'RBC-9921 (CAD)',
+    currency: 'USD', // For demo simplicity
+    amount: 2678.00,
+    invoiceCount: 1,
+    status: 'AWAITING_APPROVAL',
+    riskScore: 'LOW',
+    nextApprover: 'William Carswell',
+    invoiceIds: ['709114'],
+    paymentTerms: 'Net 45',
+    sanctionStatus: 'PASSED'
+  },
+  {
+    id: 'PY-2025-11-25-003',
+    runDate: '2025-11-25',
+    entity: 'Hitachi Energy EU',
+    bankAccount: 'DB-1120 (EUR)',
+    currency: 'USD', // For demo simplicity
+    amount: 12950.00,
+    invoiceCount: 2,
+    status: 'DRAFT',
+    riskScore: 'MEDIUM',
+    invoiceIds: ['INV-GHOST-001', 'INV-992-DUP'],
+    paymentTerms: 'Net 60',
+    sanctionStatus: 'PENDING'
   }
 ];
 
