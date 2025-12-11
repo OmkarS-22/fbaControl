@@ -61,7 +61,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="h-full flex flex-col font-sans bg-[#F3F4F6] overflow-hidden relative">
+    <div className="h-full flex flex-col font-sans bg-[#F3F4F6] ovsubmerflow-hidden relative">
       
       {/* 1. Header Section */}
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-8 py-6 shadow-sm z-10">

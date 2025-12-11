@@ -13,13 +13,44 @@ import {
   FileText,
   Database,
 } from "lucide-react";
-import { GoogleGenAI } from "@google/genai";
 import { UserRole } from "../types";
 
 interface IngestionProps {
   onBack: () => void;
   onSubmit: () => void;
   userRole: UserRole;
+}
+
+interface ExtractedInvoiceData {
+  invoiceNumber: string | null;
+  date: string | null;
+  carrier: string | null;
+  consignor: {
+    name: string | null;
+    city: string | null;
+  };
+  consignee: {
+    name: string | null;
+    city: string | null;
+  };
+  lineItems: Array<{
+    qty: number | null;
+    description: string | null;
+    unitPrice: number | null;
+    lineTotal: number | null;
+  }>;
+  subtotal: number | null;
+  salesTax: number | null;
+  total: number | null;
+}
+
+interface ExtractionResponse {
+  success: boolean;
+  message: string;
+  data: {
+    extractedData: ExtractedInvoiceData;
+    fileId: string;
+  };
 }
 
 export const InvoiceIngestion: React.FC<IngestionProps> = ({
@@ -38,6 +69,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [uploadedFileType, setUploadedFileType] = useState<string | null>(null);
+  const [extractionFileId, setExtractionFileId] = useState<string | null>(null);
 
   const [formValues, setFormValues] = useState({
     invoiceNumber: "",
@@ -47,7 +79,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
     origin: "",
     destination: "",
     totalAmount: "",
-    currency: "",
+    currency: "USD",
     lineItem2Desc: "",
     lineItem2Amount: "",
     lineItem2Code: "",
@@ -65,6 +97,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
   const isVendor = userRole === "VENDOR";
 
   // --- HANDLERS ---
@@ -79,115 +112,125 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
     const file = event.target.files?.[0];
     if (!file) return;
 
+    console.log(" FILE SELECT TRIGGERED");
+    console.log("📄 File details:", {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      lastModified: file.lastModified,
+    });
+
     setUploadedFileType(file.type);
+    setExtractionError(null);
 
     // 1. Show scanning state
     setIngestionStep("scanning");
 
-    const readFile = (file: File): Promise<string> => {
+    const readFileAsBase64 = (file: File): Promise<string> => {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target?.result as string);
-        reader.onerror = reject;
+        reader.onload = (e) => {
+          const result = e.target?.result;
+          if (typeof result === "string") {
+            console.log("📊 Base64 data info:", {
+              totalLength: result.length,
+              hasDataPrefix: result.startsWith('data:'),
+              prefix: result.substring(0, 50) + "..."
+            });
+            resolve(result);
+          } else {
+            reject(new Error("Failed to read file as base64"));
+          }
+        };
+        reader.onerror = () => reject(new Error("Failed to read file"));
         reader.readAsDataURL(file);
       });
     };
 
     try {
-      const base64Data = await readFile(file);
+      const base64Data = await readFileAsBase64(file);
       setPreviewUrl(base64Data);
 
-      // 2. Call Gemini API
-      const ai = new GoogleGenAI({
-        apiKey: "AIzaSyBAhuXMLLIMuXKtAgLAsmytDj_rS9Pb-J8",
+
+      // 3. Call your extraction API using fetch
+      console.log("🚀 Calling API: http://localhost:5000/api/invoices/extract");
+      const startTime = Date.now();
+      const response = await fetch("http://localhost:5000/api/invoices/extract", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          base64: base64Data, //  FULL DATA URI (IMPORTANT)
+        }),
       });
 
-      // Extract base64 content without header
-      const base64Content = base64Data.split(",")[1];
-      const mimeType = base64Data.substring(
-        base64Data.indexOf(":") + 1,
-        base64Data.indexOf(";")
+      const endTime = Date.now();
+      console.log(`⏱️ Request took: ${endTime - startTime}ms`);
+      console.log("📥 API Response status:", response.status, response.statusText);
+
+      const result: ExtractionResponse = await response.json();
+      console.log(" EXTRACTION RESPONSE:", result);
+
+      if (!response.ok || !result.success) {
+        console.error("❌ API Error details:", {
+          status: response.status,
+          statusText: response.statusText,
+          response: result
+        });
+        throw new Error(result.message || `HTTP error! status: ${response.status}`);
+      }
+
+      if (result.success && result.data) {
+        const { extractedData, fileId } = result.data;
+        console.log("🎉 Extraction successful!", {
+          fileId,
+          extractedData
+        });
+        setExtractionFileId(fileId);
+
+        // Rest of your code...
+
+        // 4. Map your extracted data to form values
+        setFormValues({
+          invoiceNumber: extractedData.invoiceNumber || "",
+          date: extractedData.date ? formatDate(extractedData.date) : "",
+          vendor: extractedData.carrier || extractedData.consignor?.name || "",
+          bolNumber: "",
+          origin: extractedData.consignor?.city || "",
+          destination: extractedData.consignee?.city || "",
+          totalAmount: extractedData.total?.toString() || "0.00",
+          currency: "USD",
+          lineItem2Desc: extractedData.lineItems?.[0]?.description || "",
+          lineItem2Amount: extractedData.lineItems?.[0]?.lineTotal?.toString() || "",
+          lineItem2Code: extractedData.lineItems?.[0]?.description ? getItemCode(extractedData.lineItems[0].description) : "",
+        });
+
+        // 5. Set confidence levels based on extracted data
+        setFieldConfidence({
+          invoiceNumber: extractedData.invoiceNumber ? "high" : "low",
+          date: extractedData.date ? "high" : "low",
+          vendor: (extractedData.carrier || extractedData.consignor?.name) ? "high" : "low",
+          bolNumber: "low",
+          lineItem1: extractedData.lineItems?.length > 0 ? "high" : "low",
+          lineItem2: extractedData.lineItems?.length > 1 ? "high" : "low",
+          origin: extractedData.consignor?.city ? "high" : "low",
+          destination: extractedData.consignee?.city ? "high" : "low",
+        });
+
+        setIngestionStep("verify");
+      } else {
+        throw new Error(result.message || "Extraction failed");
+      }
+    } catch (error: any) {
+      console.error("Extraction API Error:", error);
+      setExtractionError(
+        error.message ||
+        "Failed to extract invoice data. Please try again or enter manually."
       );
 
-      const prompt = `
-        Analyze this invoice image and extract the following fields in JSON format:
-        - invoiceNumber (string)
-        - date (string, YYYY-MM-DD)
-        - vendor (string)
-        - bolNumber (string, Bill of Lading)
-        - origin (string, city/port)
-        - destination (string, city/port)
-        - totalAmount (string, format 0.00)
-        - currency (string, e.g. USD, EUR)
-        - accessorials: array of objects with description, amount. Look specifically for "Bunker", "Fuel", "Security", or "THC" charges.
-
-        If a field is not found, return an empty string.
-      `;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: {
-          parts: [
-            { inlineData: { mimeType: mimeType, data: base64Content } },
-            { text: prompt },
-          ],
-        },
-        config: {
-          responseMimeType: "application/json",
-        },
-      });
-
-      // 3. Parse and Map Data (Robust JSON Parsing)
-      let text = response.text || "{}";
-
-      // Clean up potential markdown code blocks
-      if (text.startsWith("```json")) {
-        text = text.replace(/^```json/, "").replace(/```$/, "");
-      } else if (text.startsWith("```")) {
-        text = text.replace(/^```/, "").replace(/```$/, "");
-      }
-
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        console.error("JSON Parse Error:", e);
-        data = {};
-      }
-
-      setFormValues({
-        invoiceNumber: data.invoiceNumber || "",
-        date: data.date || "",
-        vendor: data.vendor || "",
-        bolNumber: data.bolNumber || "",
-        origin: data.origin || "",
-        destination: data.destination || "",
-        totalAmount: data.totalAmount || "",
-        currency: data.currency || "USD",
-        lineItem2Desc: data.accessorials?.[0]?.description || "",
-        lineItem2Amount: data.accessorials?.[0]?.amount
-          ? String(data.accessorials[0].amount)
-          : "",
-        lineItem2Code: data.accessorials?.[0] ? "FSC" : "",
-      });
-
-      // Simple confidence logic: if data exists, high confidence
-      setFieldConfidence({
-        invoiceNumber: data.invoiceNumber ? "high" : "low",
-        date: data.date ? "high" : "low",
-        vendor: data.vendor ? "high" : "low",
-        bolNumber: data.bolNumber ? "high" : "low",
-        lineItem1: "high", // Base freight usually present
-        lineItem2: data.accessorials?.length > 0 ? "high" : "low",
-        origin: data.origin ? "high" : "low",
-        destination: data.destination ? "high" : "low",
-      });
-
+      // Fallback: Allow manual entry
       setIngestionStep("verify");
-    } catch (error) {
-      console.error("Gemini Extraction Error:", error);
-      // Fallback or error handling, stay on upload or go to verify empty
-      setIngestionStep("verify"); // Allow manual entry
     }
   };
 
@@ -202,14 +245,124 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
     }
   };
 
-  const handleSubmitProcess = () => {
+  const handleSubmitProcess = async () => {
+    if (!extractionFileId) {
+      alert("Please upload a file first");
+      return;
+    }
+
     setIsSubmitting(true);
-    setTimeout(() => {
-      onSubmit(); // Call parent submit
-    }, 2000);
+
+    try {
+      // Prepare data for save API - include ALL extracted fields
+      const invoiceData = {
+        fileId: extractionFileId,
+        invoiceNumber: formValues.invoiceNumber || null,
+        date: formValues.date || null,
+        carrier: formValues.vendor || null,
+        consignor: {
+          name: formValues.vendor || null, // Using vendor field for consignor name
+          city: formValues.origin || null,
+        },
+        consignee: {
+          name: "", // Not collected in form - consider adding this field
+          city: formValues.destination || null,
+        },
+        lineItems: [
+          // Base freight line (always present)
+          {
+            qty: 1,
+            description: "Base Freight",
+            unitPrice: parseFloat(formValues.totalAmount) - parseFloat(formValues.lineItem2Amount || "0"),
+            lineTotal: parseFloat(formValues.totalAmount) - parseFloat(formValues.lineItem2Amount || "0"),
+          },
+          // Additional line items from form
+          ...(formValues.lineItem2Desc ? [{
+            qty: 1,
+            description: formValues.lineItem2Desc,
+            unitPrice: parseFloat(formValues.lineItem2Amount || "0"),
+            lineTotal: parseFloat(formValues.lineItem2Amount || "0"),
+            code: formValues.lineItem2Code || null, // Include the system code
+          }] : []),
+          // You can add more line items here if needed
+        ],
+        // Additional fields from form
+        bolNumber: formValues.bolNumber || null,
+        currency: formValues.currency || "USD",
+        // Calculated fields
+        subtotal: parseFloat(formValues.totalAmount) - (parseFloat(formValues.lineItem2Amount || "0") || 0),
+        salesTax: 0, // Default - you might want to extract this
+        total: parseFloat(formValues.totalAmount || "0"),
+        status: "processed",
+        uploadedAt: new Date().toISOString(),
+        // Metadata
+        extractionSource: "OCR",
+        confidenceScore: calculateConfidenceScore(),
+        userVerified: true, // User reviewed and submitted
+        verificationTimestamp: new Date().toISOString(),
+      };
+
+      console.log("💾 Saving invoice data:", invoiceData);
+
+      const API_BASE_URL = "http://localhost:5000/api";
+
+      const response = await fetch(`${API_BASE_URL}/invoices/save`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(invoiceData),
+      });
+
+      console.log("📤 Save API response status:", response.status);
+
+      const result = await response.json();
+      console.log(" Save API result:", result);
+
+      if (result.success) {
+        console.log("🎉 Invoice saved successfully!");
+        onSubmit();
+      } else {
+        throw new Error(result.message || "Save failed");
+      }
+    } catch (error: any) {
+      console.error("❌ Save Error:", error);
+      alert(`Failed to save invoice: ${error.message}`);
+      setIsSubmitting(false);
+    }
   };
 
-  // --- SUB-COMPONENTS ---
+  // Helper function to calculate overall confidence score
+  const calculateConfidenceScore = (): number => {
+    const fields = Object.values(fieldConfidence);
+    const highConfidenceCount = fields.filter(conf => conf === "high").length;
+    const totalFields = fields.length;
+    return Math.round((highConfidenceCount / totalFields) * 100);
+  };
+
+  // --- HELPER FUNCTIONS ---
+
+  const formatDate = (dateString: string): string => {
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) {
+        return dateString;
+      }
+      return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+    } catch {
+      return dateString;
+    }
+  };
+
+  const getItemCode = (description: string | null): string => {
+    if (!description) return "";
+    const desc = description.toLowerCase();
+    if (desc.includes("fuel") || desc.includes("bunker")) return "FSC";
+    if (desc.includes("security")) return "SEC";
+    if (desc.includes("handling")) return "THC";
+    if (desc.includes("base")) return "BAS";
+    return "";
+  };
 
   // --- RENDER: STEP 1 - UPLOAD SCREEN ---
   if (ingestionStep === "upload") {
@@ -256,7 +409,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
 
           <div className="mt-8 flex justify-center space-x-8 text-xs text-gray-400 font-bold uppercase tracking-wider">
             <span className="flex items-center">
-              <CheckCircle size={14} className="mr-2 text-teal-500" /> AI
+              <CheckCircle size={14} className="mr-2 text-teal-500" /> OCR
               Extraction
             </span>
             <span className="flex items-center">
@@ -289,7 +442,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
             Analyzing Document...
           </h2>
           <p className="text-gray-500 animate-pulse">
-            AI Engine is extracting metadata and line items
+            OCR Engine is extracting metadata and line items
           </p>
         </div>
       </div>
@@ -322,8 +475,11 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
               {isVendor
-                ? "Please review the AI-extracted data below against your original document."
-                : "AI Confidence Score: 88% (Review Required) • Model: Gemini 2.5 Flash"}
+                ? "Please review the OCR-extracted data below against your original document."
+                : "Review extracted data and submit for processing"}
+              {extractionError && (
+                <span className="text-red-500 ml-2">⚠️ {extractionError}</span>
+              )}
             </p>
           </div>
         </div>
@@ -341,7 +497,8 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
           </button>
           <button
             onClick={handleSubmitProcess}
-            className="flex items-center space-x-2 px-6 py-2 bg-[#004D40] text-white rounded-sm text-xs font-bold uppercase hover:bg-[#00352C] shadow-md transition-colors"
+            disabled={isSubmitting || !extractionFileId}
+            className="flex items-center space-x-2 px-6 py-2 bg-[#004D40] text-white rounded-sm text-xs font-bold uppercase hover:bg-[#00352C] shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting ? (
               <span className="animate-pulse">Submitting...</span>
@@ -395,12 +552,14 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
                 <iframe
                   src={previewUrl}
                   className="w-full h-[842px] border-0"
+                  title="Invoice PDF"
                 />
               ) : (
                 // 👉 Image Viewer
                 <img
                   src={previewUrl}
                   className="w-full h-auto object-contain"
+                  alt="Invoice preview"
                 />
               )
             ) : (
@@ -420,11 +579,16 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
               <p className="text-xs text-gray-500 mt-1">
                 Please verify all Amber fields before submitting.
               </p>
+              {extractionFileId && (
+                <p className="text-xs text-teal-600 mt-1">
+                  File ID: {extractionFileId.substring(0, 12)}...
+                </p>
+              )}
             </div>
             <div className="text-right text-xs">
-              <p className="font-bold text-gray-700">Gemini 2.5 Flash</p>
+              <p className="font-bold text-gray-700">OCR Engine v3</p>
               <p className="text-teal-600 flex items-center justify-end">
-                <CheckCircle size={10} className="mr-1" /> Online
+                <CheckCircle size={10} className="mr-1" /> Connected
               </p>
             </div>
           </div>
@@ -451,7 +615,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
                   onChange={(v) => handleCorrection("date", v)}
                 />
                 <InputWithStatus
-                  label="Vendor"
+                  label="Vendor / Carrier"
                   value={formValues.vendor}
                   confidence={fieldConfidence.vendor}
                   onFocus={() => handleFocus("vendor")}
@@ -496,11 +660,10 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
 
               {/* Line 1 (Inferred Base Freight) */}
               <div
-                className={`grid grid-cols-12 gap-2 items-center p-2 rounded-sm border mb-2 transition-colors ${
-                  activeField === "lineItem1"
-                    ? "border-teal-500 bg-teal-50"
-                    : "border-gray-200 bg-white hover:bg-gray-50"
-                }`}
+                className={`grid grid-cols-12 gap-2 items-center p-2 rounded-sm border mb-2 transition-colors ${activeField === "lineItem1"
+                  ? "border-teal-500 bg-teal-50"
+                  : "border-gray-200 bg-white hover:bg-gray-50"
+                  }`}
                 onClick={() => handleFocus("lineItem1")}
               >
                 <div className="col-span-5 text-sm font-medium text-gray-800">
@@ -513,8 +676,8 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
                 </div>
                 <div className="col-span-3 text-right font-bold text-gray-900">
                   {(
-                    Number(formValues.totalAmount.replace(/[^0-9.-]+/g, "")) -
-                    Number(formValues.lineItem2Amount.replace(/[^0-9.-]+/g, ""))
+                    Number(formValues.totalAmount.replace(/[^0-9.-]+/g, "") || 0) -
+                    Number(formValues.lineItem2Amount.replace(/[^0-9.-]+/g, "") || 0)
                   ).toFixed(2)}
                 </div>
                 <div className="col-span-1 flex justify-center">
@@ -525,11 +688,10 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
               {/* Line 2 (Extracted Accessorials) */}
               <div
                 className={`grid grid-cols-12 gap-2 items-center p-2 rounded-sm border mb-2 transition-colors cursor-pointer
-                   ${
-                     fieldConfidence.lineItem2 === "low"
-                       ? "border-amber-400 bg-amber-50"
-                       : "border-teal-200 bg-teal-50"
-                   }
+                   ${fieldConfidence.lineItem2 === "low"
+                    ? "border-amber-400 bg-amber-50"
+                    : "border-teal-200 bg-teal-50"
+                  }
                    ${activeField === "lineItem2" ? "ring-1 ring-amber-500" : ""}
                  `}
                 onClick={() => handleFocus("lineItem2")}
@@ -538,15 +700,14 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
                   <input
                     type="text"
                     value={formValues.lineItem2Desc}
-                    placeholder="Accessorial (e.g. BAF)"
+                    placeholder="Accessorial (e.g. BAF, Fuel)"
                     onChange={(e) =>
                       handleCorrection("lineItem2Desc", e.target.value)
                     }
-                    className={`w-full text-sm font-medium bg-transparent border-b border-dashed focus:outline-none ${
-                      fieldConfidence.lineItem2 === "low"
-                        ? "border-amber-500 text-amber-900"
-                        : "border-teal-500 text-teal-900"
-                    }`}
+                    className={`w-full text-sm font-medium bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItem2 === "low"
+                      ? "border-amber-500 text-amber-900"
+                      : "border-teal-500 text-teal-900"
+                      }`}
                   />
                 </div>
                 <div className="col-span-3">
@@ -574,20 +735,18 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
                     onChange={(e) =>
                       handleCorrection("lineItem2Amount", e.target.value)
                     }
-                    className={`w-full text-right font-bold bg-transparent border-b border-dashed focus:outline-none ${
-                      fieldConfidence.lineItem2 === "low"
-                        ? "border-amber-500 text-amber-900"
-                        : "border-teal-500 text-teal-900"
-                    }`}
+                    className={`w-full text-right font-bold bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItem2 === "low"
+                      ? "border-amber-500 text-amber-900"
+                      : "border-teal-500 text-teal-900"
+                      }`}
                   />
                 </div>
                 <div className="col-span-1 flex justify-center">
                   <div
-                    className={`w-2.5 h-2.5 rounded-full ${
-                      fieldConfidence.lineItem2 === "low"
-                        ? "bg-amber-500 animate-pulse"
-                        : "bg-teal-500"
-                    }`}
+                    className={`w-2.5 h-2.5 rounded-full ${fieldConfidence.lineItem2 === "low"
+                      ? "bg-amber-500 animate-pulse"
+                      : "bg-teal-500"
+                      }`}
                   ></div>
                 </div>
               </div>
@@ -598,7 +757,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
               <div className="w-48 space-y-2">
                 <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-200 pt-2">
                   <span>Total ({formValues.currency})</span>
-                  <span>{formValues.totalAmount}</span>
+                  <span>{formValues.totalAmount || "0.00"}</span>
                 </div>
               </div>
             </div>
@@ -617,7 +776,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
               Submission Complete
             </h3>
             <p className="text-gray-500 mb-4">
-              Invoice has been sent to 3SC for Audit.
+              Invoice has been saved and sent for processing.
             </p>
             <p className="text-xs text-gray-400 font-mono">Redirecting...</p>
           </div>
@@ -628,22 +787,29 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
 };
 
 // --- HELPER COMPONENT ---
-const InputWithStatus = ({
+interface InputWithStatusProps {
+  label: string;
+  value: string;
+  confidence: "high" | "low";
+  onFocus: () => void;
+  onChange: (value: string) => void;
+}
+
+const InputWithStatus: React.FC<InputWithStatusProps> = ({
   label,
   value,
   confidence,
   onFocus,
   onChange,
-}: any) => {
+}) => {
   const isHigh = confidence === "high";
   return (
     <div className="relative">
       <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 flex justify-between">
         {label}
         <span
-          className={`text-[9px] ${
-            isHigh ? "text-teal-600" : "text-amber-600"
-          }`}
+          className={`text-[9px] ${isHigh ? "text-teal-600" : "text-amber-600"
+            }`}
         >
           {isHigh ? "High Confidence" : "Review Needed"}
         </span>
@@ -655,11 +821,10 @@ const InputWithStatus = ({
           onFocus={onFocus}
           onChange={(e) => onChange(e.target.value)}
           className={`w-full border rounded-sm px-3 py-2 text-sm font-medium transition-shadow focus:outline-none focus:ring-1 
-                  ${
-                    isHigh
-                      ? "border-gray-300 focus:border-teal-500 focus:ring-teal-500 text-gray-800"
-                      : "border-amber-300 focus:border-amber-500 focus:ring-amber-500 text-gray-900 bg-amber-50/50"
-                  }`}
+                  ${isHigh
+              ? "border-gray-300 focus:border-teal-500 focus:ring-teal-500 text-gray-800"
+              : "border-amber-300 focus:border-amber-500 focus:ring-amber-500 text-gray-900 bg-amber-50/50"
+            }`}
         />
         {!isHigh && (
           <AlertTriangle
