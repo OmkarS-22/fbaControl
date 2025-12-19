@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Invoice, InvoiceStatus } from "../types";
 import {
   MoreHorizontal,
@@ -15,6 +15,8 @@ import {
   Eye,
   Flag,
   Calculator,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 
 interface InvoiceWorkbenchProps {
@@ -40,10 +42,72 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
   const [activeActionMenu, setActiveActionMenu] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Extract Unique Carriers for Dropdown
+  // API Data State
+  const [apiInvoices, setApiInvoices] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    approved: 0,
+    pending: { total: 0, count: 0 },
+    exception: { total: 0, count: 0 },
+    rejected: 0,
+    processed: 0,
+    paid: 0,
+  });
+
+  // Fetch data from API
+  useEffect(() => {
+    fetchInvoices();
+    fetchStats();
+  }, []);
+
+  // Fetch invoices from API
+  const fetchInvoices = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('http://localhost:5000/api/invoices');
+      const data = await res.json();
+      
+      if (data.success) {
+        setApiInvoices(data.data);
+      } else {
+        console.error('Failed to fetch invoices:', data.message);
+      }
+    } catch (error) {
+      console.error('Error fetching invoices:', error);
+      triggerToast('Failed to load invoices from API');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch statistics from API
+  const fetchStats = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/invoices/stats');
+      const data = await res.json();
+      
+      if (data.success) {
+        // Ensure stats have proper structure
+        setStats({
+          approved: data.data.approved || 0,
+          pending: data.data.pending || { total: 0, count: 0 },
+          exception: data.data.exception || { total: 0, count: 0 },
+          rejected: data.data.rejected || 0,
+          processed: data.data.processed || 0,
+          paid: data.data.paid || 0
+        });
+      } else {
+        console.error('Failed to fetch stats:', data.message);
+      }
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
+
+  // Extract Unique Carriers for Dropdown from API data
   const uniqueCarriers = [
     "All",
-    ...Array.from(new Set(invoices.map((inv) => inv.carrier))).sort(),
+    ...Array.from(new Set(apiInvoices.map((inv: any) => inv.carrier))).sort(),
   ];
 
   const triggerToast = (msg: string) => {
@@ -66,6 +130,19 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
     e.stopPropagation();
     setActiveActionMenu(null);
     triggerToast(`Invoice #${id} flagged for senior audit review.`);
+  };
+
+  // Map API status to InvoiceStatus enum
+  const getInvoiceStatus = (status: string): InvoiceStatus => {
+    switch (status.toLowerCase()) {
+      case 'approved': return InvoiceStatus.APPROVED;
+      case 'exception': return InvoiceStatus.EXCEPTION;
+      case 'rejected': return InvoiceStatus.REJECTED;
+      case 'pending': return InvoiceStatus.PENDING;
+      case 'paid': return InvoiceStatus.PAID;
+      case 'processed': return InvoiceStatus.PENDING; // Map processed to pending
+      default: return InvoiceStatus.PENDING;
+    }
   };
 
   const getStatusBadge = (status: InvoiceStatus) => {
@@ -97,19 +174,37 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
     }
   };
 
+  // Helper function to get variance
+  const getVariance = (invoice: any): number => {
+    if (invoice.tmsEstimatedAmount && invoice.total) {
+      return invoice.total - invoice.tmsEstimatedAmount;
+    }
+    return 0;
+  };
+
+  // Helper function to determine if it's a ghost shipment
+  const isGhostShipment = (invoice: any): boolean => {
+    return invoice.tmsMatchStatus === 'NOT_FOUND' || !invoice.tmsMatchStatus;
+  };
+
   // --- FILTERING LOGIC ---
-  const filteredInvoices = invoices.filter((inv) => {
+  const filteredInvoices = apiInvoices.filter((inv: any) => {
     // 1. Status Filter (Quick Toggle)
-    if (statusFilter !== "ALL" && inv.status !== statusFilter) return false;
+    const status = getInvoiceStatus(inv.status);
+    if (statusFilter !== "ALL") {
+      if (statusFilter === "EXCEPTION" && status !== InvoiceStatus.EXCEPTION) return false;
+      if (statusFilter === "APPROVED" && status !== InvoiceStatus.APPROVED) return false;
+    }
 
     // 2. Search Query (Invoice #, Reason, Lane)
     const q = searchQuery.toLowerCase();
     if (q) {
       const match =
-        inv.invoiceNumber.toLowerCase().includes(q) ||
+        inv.invoiceNumber?.toLowerCase().includes(q) ||
         inv.reason?.toLowerCase().includes(q) ||
-        inv.origin.toLowerCase().includes(q) ||
-        inv.destination.toLowerCase().includes(q);
+        inv.consignor?.city?.toLowerCase().includes(q) ||
+        inv.consignee?.city?.toLowerCase().includes(q) ||
+        inv.carrier?.toLowerCase().includes(q);
       if (!match) return false;
     }
 
@@ -130,29 +225,32 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
 
   // --- GRID SUMMARY CALCULATIONS ---
   const totalListValue = filteredInvoices.reduce(
-    (sum, inv) => sum + inv.amount,
+    (sum: number, inv: any) => sum + (inv.total || 0),
     0
   );
 
   // --- TOP KPI CALCULATIONS ---
-  // Using hardcoded values to create a more realistic dashboard view beyond the 5 mock invoices
-  const totalPendingCount =
-    invoices.filter((i) => i.status === "PENDING").length + 24;
-  const totalApprovedCount =
-    invoices.filter((i) => i.status === "APPROVED").length + 142;
-  const totalExceptionCount =
-    invoices.filter((i) => i.status === "EXCEPTION").length + 11;
-  const totalRejectedCount =
-    invoices.filter((i) => i.status === "REJECTED").length + 5;
-  const totalInvoiceCount =
-    totalPendingCount +
-    totalApprovedCount +
-    totalExceptionCount +
-    totalRejectedCount;
+  const totalPendingCount = typeof stats.pending === 'object' ? stats.pending.count : stats.pending;
+  const totalApprovedCount = stats.approved || 0;
+  const totalExceptionCount = typeof stats.exception === 'object' ? stats.exception.count : stats.exception;
+  const totalRejectedCount = stats.rejected || 0;
+  const totalProcessedCount = stats.processed || 0;
+  const totalPaidCount = stats.paid || 0;
+  
+  const totalInvoiceCount = apiInvoices.length;
 
-  // Calculate Total Value of ALL invoices, adding a base for realism
-  const totalAllInvoicesValue =
-    invoices.reduce((sum, inv) => sum + inv.amount, 0) + 2545900.0;
+  // Calculate Total Value of ALL invoices
+  const totalAllInvoicesValue = apiInvoices.reduce(
+    (sum: number, inv: any) => sum + (inv.total || 0), 
+    0
+  );
+
+  // Refresh data
+  const handleRefresh = async () => {
+    await fetchInvoices();
+    await fetchStats();
+    triggerToast('Data refreshed successfully');
+  };
 
   return (
     <div
@@ -168,13 +266,19 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
           <p className="text-2xl font-bold text-gray-800 mt-1">
             {totalInvoiceCount.toLocaleString()}
           </p>
+          <button 
+            onClick={handleRefresh}
+            className="mt-2 text-xs text-gray-500 hover:text-teal-600 flex items-center"
+          >
+            <RefreshCw size={12} className="mr-1" /> Refresh
+          </button>
         </div>
         <div className="bg-white p-4 border-l-4 border-blue-500 shadow-sm rounded-sm">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
             Total Value Invoiced
           </p>
           <p className="text-2xl font-bold text-blue-600 mt-1">
-            ${totalAllInvoicesValue.toLocaleString("en-US")}
+            ${totalAllInvoicesValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </p>
         </div>
         <div className="bg-white p-4 border border-gray-200 shadow-sm rounded-sm">
@@ -182,7 +286,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
             Pending Audit
           </p>
           <p className="text-2xl font-bold text-gray-900 mt-1">
-            {totalPendingCount}
+            {totalPendingCount.toLocaleString()}
           </p>
         </div>
         <div className="bg-white p-4 border-l-4 border-teal-500 shadow-sm rounded-sm">
@@ -190,7 +294,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
             Auto-Approved
           </p>
           <p className="text-2xl font-bold text-teal-600 mt-1">
-            {totalApprovedCount}
+            {totalApprovedCount.toLocaleString()}
           </p>
         </div>
         <div className="bg-white p-4 border-l-4 border-red-500 shadow-sm rounded-sm">
@@ -198,7 +302,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
             Exceptions
           </p>
           <p className="text-2xl font-bold text-red-600 mt-1">
-            {totalExceptionCount}
+            {totalExceptionCount.toLocaleString()}
           </p>
         </div>
         <div className="bg-white p-4 border border-gray-200 shadow-sm rounded-sm">
@@ -206,7 +310,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
             Rejected
           </p>
           <p className="text-2xl font-bold text-gray-600 mt-1">
-            {totalRejectedCount}
+            {totalRejectedCount.toLocaleString()}
           </p>
         </div>
       </div>
@@ -280,7 +384,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="Invoice #, Reason, Lane..."
+                    placeholder="Invoice #, Reason, Carrier, City..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-sm text-sm focus:border-teal-500 focus:outline-none"
@@ -352,199 +456,242 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
 
       {/* 4. The Workhorse Grid */}
       <div className="bg-white border border-gray-200 shadow-sm rounded-sm flex-1 overflow-auto custom-scrollbar pb-24">
-        <table className="w-full text-left border-collapse">
-          <thead className="sticky top-0 bg-[#F9FAFB] z-10 shadow-sm">
-            <tr className="text-xs font-bold text-gray-600 border-b border-gray-200 uppercase tracking-wider">
-              <th className="py-4 px-6 bg-[#F9FAFB]">Status</th>
-              <th className="py-4 px-6 bg-[#F9FAFB]">Invoice #</th>
-              <th className="py-4 px-6 bg-[#F9FAFB]">Carrier</th>
+        {loading ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <RefreshCw size={48} className="animate-spin text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600">Loading invoices...</p>
+            </div>
+          </div>
+        ) : (
+          <table className="w-full text-left border-collapse">
+            <thead className="sticky top-0 bg-[#F9FAFB] z-10 shadow-sm">
+              <tr className="text-xs font-bold text-gray-600 border-b border-gray-200 uppercase tracking-wider">
+                <th className="py-4 px-6 bg-[#F9FAFB]">Status</th>
+                <th className="py-4 px-6 bg-[#F9FAFB]">Invoice #</th>
+                <th className="py-4 px-6 bg-[#F9FAFB]">Carrier</th>
 
-              {/* --- SOLID FEATURE: DUAL-RATING COLUMNS --- */}
-              <th className="py-4 px-6 text-right bg-[#F9FAFB] border-l border-gray-100">
-                TMS Est.
-              </th>
-              <th className="py-4 px-6 text-right bg-[#F9FAFB]">ATLAS Audit</th>
-              <th className="py-4 px-6 text-right bg-[#F9FAFB]">Billed Amt</th>
-              <th className="py-4 px-6 text-right bg-[#F9FAFB]">Variance</th>
+                {/* --- SOLID FEATURE: DUAL-RATING COLUMNS --- */}
+                <th className="py-4 px-6 text-right bg-[#F9FAFB] border-l border-gray-100">
+                  TMS Est.
+                </th>
+                <th className="py-4 px-6 text-right bg-[#F9FAFB]">ATLAS Audit</th>
+                <th className="py-4 px-6 text-right bg-[#F9FAFB]">Billed Amt</th>
+                <th className="py-4 px-6 text-right bg-[#F9FAFB]">Variance</th>
 
-              <th className="py-4 px-6 bg-[#F9FAFB]">Reason</th>
-              <th className="py-4 px-6 text-center bg-[#F9FAFB]">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="text-sm text-gray-700">
-            {filteredInvoices.length > 0 ? (
-              filteredInvoices.map((inv) => {
-                const isDuplicate = inv.reason?.includes("Duplicate");
-                const isGhost = inv.tmsMatchStatus === "NOT_FOUND";
-                const isMenuOpen = activeActionMenu === inv.id;
+                <th className="py-4 px-6 bg-[#F9FAFB]">Reason</th>
+                <th className="py-4 px-6 text-center bg-[#F9FAFB]">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="text-sm text-gray-700">
+              {filteredInvoices.length > 0 ? (
+                filteredInvoices.map((inv: any) => {
+                  const status = getInvoiceStatus(inv.status);
+                  const isDuplicate = inv.reason?.includes("Duplicate");
+                  const isGhost = isGhostShipment(inv);
+                  const isMenuOpen = activeActionMenu === inv._id;
+                  const variance = getVariance(inv);
 
-                return (
-                  <tr
-                    key={inv.id}
-                    className={`border-b border-gray-100 cursor-pointer transition-colors group
+                  // Prepare invoice for selection (merge with existing structure)
+                  const preparedInvoice: Invoice = {
+                    ...inv,
+                    id: inv._id || inv.id,
+                    amount: inv.total || 0,
+                    origin: inv.consignor?.city || '',
+                    destination: inv.consignee?.city || '',
+                    variance: variance,
+                    status: status,
+                    lineItems: inv.lineItems?.map((item: any) => ({
+                      description: item.description,
+                      amount: item.lineTotal,
+                      expectedAmount: item.lineTotal,
+                      qty: item.qty,
+                      unitPrice: item.unitPrice,
+                      lineTotal: item.lineTotal,
+                      code: item.code
+                    })) || []
+                  };
+
+                  return (
+                    <tr
+                      key={inv._id}
+                      className={`border-b border-gray-100 cursor-pointer transition-colors group
                        ${
                          isDuplicate
                            ? "bg-red-50 hover:bg-red-100"
                            : "hover:bg-teal-50/30"
                        }
                      `}
-                    onClick={() => onSelectInvoice(inv)}
-                  >
-                    <td className="py-4 px-6">
-                      {getStatusBadge(inv.status)}
-                      {/* --- SOLID FEATURE: GHOST TAG --- */}
-                      {isGhost && (
-                        <div className="mt-1 flex items-center text-[10px] text-gray-500 font-bold uppercase">
-                          <Ghost size={10} className="mr-1 text-gray-400" />
-                          Non-TMS
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-4 px-6 font-medium text-blue-600 group-hover:underline">
-                      <div className="flex items-center space-x-2">
-                        <FileText
-                          size={16}
-                          className="text-gray-400 group-hover:text-blue-600"
-                        />
-                        <span>#{inv.invoiceNumber}</span>
-                      </div>
-                      {/* Source Tag */}
-                      <span className="text-[10px] text-gray-400 font-normal ml-6 block">
-                        Src: {inv.source}
-                      </span>
-                    </td>
-                    <td className="py-4 px-6 font-medium">
-                      {inv.carrier}
-                      <span className="block text-xs text-gray-500 font-normal">
-                        {inv.origin} &rarr; {inv.destination}
-                      </span>
-                    </td>
-
-                    {/* --- SOLID FEATURE: DUAL-RATING DATA --- */}
-                    <td className="py-4 px-6 text-right font-mono text-gray-400 border-l border-gray-100">
-                      {inv.tmsEstimatedAmount ? (
-                        `$${inv.tmsEstimatedAmount.toLocaleString()}`
-                      ) : (
-                        <span className="text-[10px] italic">--</span>
-                      )}
-                    </td>
-                    <td className="py-4 px-6 text-right font-mono font-bold text-gray-800">
-                      ${(inv.auditAmount || 0).toLocaleString()}
-                    </td>
-                    <td className="py-4 px-6 text-right font-mono text-gray-600">
-                      ${inv.amount.toLocaleString()}
-                    </td>
-                    <td
-                      className={`py-4 px-6 text-right font-bold font-mono ${
-                        inv.variance > 0 ? "text-red-600" : "text-teal-600"
-                      }`}
+                      onClick={() => onSelectInvoice(preparedInvoice)}
                     >
-                      {inv.variance > 0 ? "+" : ""}${inv.variance.toFixed(2)}
-                    </td>
-
-                    <td className="py-4 px-6 text-xs font-medium text-gray-500">
-                      <div className="flex items-center">
-                        {isDuplicate && (
-                          <ShieldAlert
-                            size={14}
-                            className="mr-1 text-red-600"
-                          />
-                        )}
+                      <td className="py-4 px-6">
+                        {getStatusBadge(status)}
+                        {/* --- SOLID FEATURE: GHOST TAG --- */}
                         {isGhost && (
-                          <AlertTriangle
-                            size={14}
-                            className="mr-1 text-amber-500"
-                          />
+                          <div className="mt-1 flex items-center text-[10px] text-gray-500 font-bold uppercase">
+                            <Ghost size={10} className="mr-1 text-gray-400" />
+                            Non-TMS
+                          </div>
                         )}
-                        <span
-                          className={
-                            isDuplicate
-                              ? "text-red-700 font-bold"
-                              : isGhost
-                              ? "text-amber-700 font-bold"
-                              : ""
-                          }
-                        >
-                          {inv.reason}
+                      </td>
+                      <td className="py-4 px-6 font-medium text-blue-600 group-hover:underline">
+                        <div className="flex items-center space-x-2">
+                          <FileText
+                            size={16}
+                            className="text-gray-400 group-hover:text-blue-600"
+                          />
+                          <span>#{inv.invoiceNumber}</span>
+                        </div>
+                        {/* Source Tag */}
+                        <span className="text-[10px] text-gray-400 font-normal ml-6 block">
+                          Src: {inv.source || 'MANUAL'}
                         </span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-6 text-center relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveActionMenu(isMenuOpen ? null : inv.id);
-                        }}
-                        className={`p-1 rounded-full transition-colors ${
-                          isMenuOpen
-                            ? "bg-teal-100 text-teal-700"
-                            : "hover:bg-gray-200 text-gray-400 hover:text-teal-600"
+                      </td>
+                      <td className="py-4 px-6 font-medium">
+                        {inv.carrier}
+                        <span className="block text-xs text-gray-500 font-normal">
+                          {inv.consignor?.city || 'N/A'} &rarr; {inv.consignee?.city || 'N/A'}
+                        </span>
+                      </td>
+
+                      {/* --- SOLID FEATURE: DUAL-RATING DATA --- */}
+                      <td className="py-4 px-6 text-right font-mono text-gray-400 border-l border-gray-100">
+                        {inv.tmsEstimatedAmount ? (
+                          `$${(inv.tmsEstimatedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+                        ) : (
+                          <span className="text-[10px] italic">--</span>
+                        )}
+                      </td>
+                      <td className="py-4 px-6 text-right font-mono font-bold text-gray-800">
+                        ${(inv.auditAmount || inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-4 px-6 text-right font-mono text-gray-600">
+                        ${(inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td
+                        className={`py-4 px-6 text-right font-bold font-mono ${
+                          variance > 0 ? "text-red-600" : "text-teal-600"
                         }`}
                       >
-                        <MoreHorizontal size={18} />
-                      </button>
+                        {variance > 0 ? "+" : ""}${Math.abs(variance).toFixed(2)}
+                      </td>
 
-                      {/* Context Menu */}
-                      {isMenuOpen && (
-                        <div className="absolute right-8 top-8 w-48 bg-white shadow-xl border border-gray-200 rounded-sm z-50 animate-fade-in-up">
-                          <div className="py-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onSelectInvoice(inv);
-                              }}
-                              className="w-full text-left px-4 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 flex items-center"
-                            >
-                              <Eye size={14} className="mr-2 text-gray-400" />{" "}
-                              View Details
-                            </button>
-                            <button
-                              onClick={(e) => handleQuickApprove(e, inv.id)}
-                              className="w-full text-left px-4 py-2 text-xs font-bold text-teal-700 hover:bg-teal-50 flex items-center"
-                            >
-                              <Check size={14} className="mr-2" /> Quick Approve
-                            </button>
-                            <button
-                              onClick={(e) =>
-                                handleFlagReview(e, inv.invoiceNumber)
-                              }
-                              className="w-full text-left px-4 py-2 text-xs font-bold text-orange-700 hover:bg-orange-50 flex items-center"
-                            >
-                              <Flag size={14} className="mr-2" /> Flag for
-                              Review
-                            </button>
-                            <div className="border-t border-gray-100 my-1"></div>
-                            <button className="w-full text-left px-4 py-2 text-xs text-gray-500 hover:bg-gray-50 flex items-center">
-                              <Download size={14} className="mr-2" /> Download
-                              PDF
-                            </button>
-                          </div>
+                      <td className="py-4 px-6 text-xs font-medium text-gray-500">
+                        <div className="flex items-center">
+                          {isDuplicate && (
+                            <ShieldAlert
+                              size={14}
+                              className="mr-1 text-red-600"
+                            />
+                          )}
+                          {isGhost && (
+                            <AlertTriangle
+                              size={14}
+                              className="mr-1 text-amber-500"
+                            />
+                          )}
+                          <span
+                            className={
+                              isDuplicate
+                                ? "text-red-700 font-bold"
+                                : isGhost
+                                ? "text-amber-700 font-bold"
+                                : ""
+                            }
+                          >
+                            {inv.reason || (isGhost ? 'Ghost Shipment' : 'Under Review')}
+                          </span>
                         </div>
+                      </td>
+                      <td className="py-4 px-6 text-center relative">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveActionMenu(isMenuOpen ? null : inv._id);
+                          }}
+                          className={`p-1 rounded-full transition-colors ${
+                            isMenuOpen
+                              ? "bg-teal-100 text-teal-700"
+                              : "hover:bg-gray-200 text-gray-400 hover:text-teal-600"
+                          }`}
+                        >
+                          <MoreHorizontal size={18} />
+                        </button>
+
+                        {/* Context Menu */}
+                        {isMenuOpen && (
+                          <div className="absolute right-8 top-8 w-48 bg-white shadow-xl border border-gray-200 rounded-sm z-50 animate-fade-in-up">
+                            <div className="py-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSelectInvoice(preparedInvoice);
+                                }}
+                                className="w-full text-left px-4 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 flex items-center"
+                              >
+                                <Eye size={14} className="mr-2 text-gray-400" />{" "}
+                                View Details
+                              </button>
+                              <button
+                                onClick={(e) => handleQuickApprove(e, inv.invoiceNumber)}
+                                className="w-full text-left px-4 py-2 text-xs font-bold text-teal-700 hover:bg-teal-50 flex items-center"
+                              >
+                                <Check size={14} className="mr-2" /> Quick Approve
+                              </button>
+                              <button
+                                onClick={(e) =>
+                                  handleFlagReview(e, inv.invoiceNumber)
+                                }
+                                className="w-full text-left px-4 py-2 text-xs font-bold text-orange-700 hover:bg-orange-50 flex items-center"
+                              >
+                                <Flag size={14} className="mr-2" /> Flag for
+                                Review
+                              </button>
+                              <div className="border-t border-gray-100 my-1"></div>
+                              <button className="w-full text-left px-4 py-2 text-xs text-gray-500 hover:bg-gray-50 flex items-center">
+                                <Download size={14} className="mr-2" /> Download
+                                PDF
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={9} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center text-gray-400">
+                      <Filter size={48} className="mb-4 opacity-20" />
+                      <p className="text-sm font-bold text-gray-600">
+                        No invoices match your filters.
+                      </p>
+                      {apiInvoices.length === 0 ? (
+                        <>
+                          <p className="text-xs text-gray-500 mt-2">No invoices found in the system.</p>
+                          <button
+                            onClick={fetchInvoices}
+                            className="mt-3 text-teal-600 hover:underline text-xs font-bold flex items-center"
+                          >
+                            <RefreshCw size={12} className="mr-1" /> Try Again
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={clearAllFilters}
+                          className="mt-2 text-teal-600 hover:underline text-xs font-bold"
+                        >
+                          Clear all filters
+                        </button>
                       )}
-                    </td>
-                  </tr>
-                );
-              })
-            ) : (
-              <tr>
-                <td colSpan={9} className="px-6 py-12 text-center">
-                  <div className="flex flex-col items-center justify-center text-gray-400">
-                    <Filter size={48} className="mb-4 opacity-20" />
-                    <p className="text-sm font-bold text-gray-600">
-                      No invoices match your filters.
-                    </p>
-                    <button
-                      onClick={clearAllFilters}
-                      className="mt-2 text-teal-600 hover:underline text-xs font-bold"
-                    >
-                      Clear all filters
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* --- TOAST NOTIFICATION --- */}
