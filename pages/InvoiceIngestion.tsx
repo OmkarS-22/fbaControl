@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   ArrowLeft,
   ZoomIn,
@@ -71,34 +71,99 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
   const [uploadedFileType, setUploadedFileType] = useState<string | null>(null);
   const [extractionFileId, setExtractionFileId] = useState<string | null>(null);
 
+  // Updated form structure to match extracted data
   const [formValues, setFormValues] = useState({
+    // Header fields
     invoiceNumber: "",
     date: "",
-    vendor: "",
-    bolNumber: "",
-    origin: "",
-    destination: "",
-    totalAmount: "",
+    carrier: "",
+
+    // Consignor fields
+    consignorName: "",
+    consignorCity: "",
+
+    // Consignee fields
+    consigneeName: "",
+    consigneeCity: "",
+
+    // Line items - support multiple items
+    lineItems: [
+      {
+        qty: "",
+        description: "",
+        unitPrice: "",
+        lineTotal: "",
+        code: "",
+      }
+    ],
+
+    // Totals
+    subtotal: "",
+    salesTax: "",
+    total: "",
+
+    // Additional fields (if needed)
     currency: "USD",
-    lineItem2Desc: "",
-    lineItem2Amount: "",
-    lineItem2Code: "",
   });
 
   const [fieldConfidence, setFieldConfidence] = useState({
     invoiceNumber: "low",
     date: "low",
-    vendor: "low",
-    bolNumber: "low",
-    lineItem1: "low",
-    lineItem2: "low",
-    origin: "low",
-    destination: "low",
+    carrier: "low",
+    consignorName: "low",
+    consignorCity: "low",
+    consigneeName: "low",
+    consigneeCity: "low",
+    lineItems: "low",
+    subtotal: "low",
+    salesTax: "low",
+    total: "low",
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const isVendor = userRole === "VENDOR";
+
+  // Handler to update line item fields
+  const updateLineItem = (index: number, field: string, value: string) => {
+    setFormValues(prev => {
+      const newLineItems = [...prev.lineItems];
+      newLineItems[index] = {
+        ...newLineItems[index],
+        [field]: value
+      };
+      return {
+        ...prev,
+        lineItems: newLineItems
+      };
+    });
+
+    // Update confidence for line items
+    if (field === "description" || field === "lineTotal") {
+      setFieldConfidence(prev => ({ ...prev, lineItems: "high" }));
+    }
+  };
+
+  // Add new line item
+  const addLineItem = () => {
+    setFormValues(prev => ({
+      ...prev,
+      lineItems: [
+        ...prev.lineItems,
+        { qty: "", description: "", unitPrice: "", lineTotal: "", code: "" }
+      ]
+    }));
+  };
+
+  // Remove line item
+  const removeLineItem = (index: number) => {
+    if (formValues.lineItems.length > 1) {
+      setFormValues(prev => ({
+        ...prev,
+        lineItems: prev.lineItems.filter((_, i) => i !== index)
+      }));
+    }
+  };
 
   // --- HANDLERS ---
 
@@ -151,7 +216,6 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
       const base64Data = await readFileAsBase64(file);
       setPreviewUrl(base64Data);
 
-
       // 3. Call your extraction API using fetch
       console.log("🚀 Calling API: http://localhost:5000/api/invoices/extract");
       const startTime = Date.now();
@@ -161,7 +225,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          base64: base64Data, //  FULL DATA URI (IMPORTANT)
+          base64: base64Data,
         }),
       });
 
@@ -182,40 +246,56 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
       }
 
       if (result.success && result.data) {
-        const { extractedData, fileId } = result.data;
+        const { extractedData: rawData, fileId } = result.data;
+
+        const extractedData: ExtractedInvoiceData = {
+          ...rawData,
+          lineItems: (rawData as any).line_items ?? []
+        };
+
         console.log("🎉 Extraction successful!", {
           fileId,
           extractedData
         });
         setExtractionFileId(fileId);
 
-        // Rest of your code...
+        // 4. Map extracted data to form values EXACTLY as received
+        const mappedLineItems = extractedData.lineItems?.map(item => ({
+          qty: item.qty?.toString() || "",
+          description: item.description || "",
+          unitPrice: item.unitPrice?.toString() || "",
+          lineTotal: item.lineTotal?.toString() || "",
+          code: item.description ? getItemCode(item.description) : ""
+        })) || [{ qty: "", description: "", unitPrice: "", lineTotal: "", code: "" }];
 
-        // 4. Map your extracted data to form values
         setFormValues({
           invoiceNumber: extractedData.invoiceNumber || "",
           date: extractedData.date ? formatDate(extractedData.date) : "",
-          vendor: extractedData.carrier || extractedData.consignor?.name || "",
-          bolNumber: "",
-          origin: extractedData.consignor?.city || "",
-          destination: extractedData.consignee?.city || "",
-          totalAmount: extractedData.total?.toString() || "0.00",
+          carrier: extractedData.carrier || "",
+          consignorName: extractedData.consignor?.name || "",
+          consignorCity: extractedData.consignor?.city || "",
+          consigneeName: extractedData.consignee?.name || "",
+          consigneeCity: extractedData.consignee?.city || "",
+          lineItems: mappedLineItems,
+          subtotal: extractedData.subtotal?.toString() || "",
+          salesTax: extractedData.salesTax?.toString() || "",
+          total: extractedData.total?.toString() || "",
           currency: "USD",
-          lineItem2Desc: extractedData.lineItems?.[0]?.description || "",
-          lineItem2Amount: extractedData.lineItems?.[0]?.lineTotal?.toString() || "",
-          lineItem2Code: extractedData.lineItems?.[0]?.description ? getItemCode(extractedData.lineItems[0].description) : "",
         });
 
         // 5. Set confidence levels based on extracted data
         setFieldConfidence({
           invoiceNumber: extractedData.invoiceNumber ? "high" : "low",
           date: extractedData.date ? "high" : "low",
-          vendor: (extractedData.carrier || extractedData.consignor?.name) ? "high" : "low",
-          bolNumber: "low",
-          lineItem1: extractedData.lineItems?.length > 0 ? "high" : "low",
-          lineItem2: extractedData.lineItems?.length > 1 ? "high" : "low",
-          origin: extractedData.consignor?.city ? "high" : "low",
-          destination: extractedData.consignee?.city ? "high" : "low",
+          carrier: extractedData.carrier ? "high" : "low",
+          consignorName: extractedData.consignor?.name ? "high" : "low",
+          consignorCity: extractedData.consignor?.city ? "high" : "low",
+          consigneeName: extractedData.consignee?.name ? "high" : "low",
+          consigneeCity: extractedData.consignee?.city ? "high" : "low",
+          lineItems: extractedData.lineItems?.length > 0 ? "high" : "low",
+          subtotal: extractedData.subtotal !== null ? "high" : "low",
+          salesTax: extractedData.salesTax !== null ? "high" : "low",
+          total: extractedData.total !== null ? "high" : "low",
         });
 
         setIngestionStep("verify");
@@ -228,8 +308,6 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
         error.message ||
         "Failed to extract invoice data. Please try again or enter manually."
       );
-
-      // Fallback: Allow manual entry
       setIngestionStep("verify");
     }
   };
@@ -240,9 +318,6 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
 
   const handleCorrection = (field: string, value: string) => {
     setFormValues((prev) => ({ ...prev, [field]: value }));
-    if (field === "lineItem2Amount" || field === "lineItem2Desc") {
-      setFieldConfidence((prev) => ({ ...prev, lineItem2: "high" }));
-    }
   };
 
   const handleSubmitProcess = async () => {
@@ -254,51 +329,41 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Prepare data for save API - include ALL extracted fields
+      console.log(formValues)
+      // Prepare data for save API - using the exact structure from extraction
       const invoiceData = {
         fileId: extractionFileId,
         invoiceNumber: formValues.invoiceNumber || null,
         date: formValues.date || null,
-        carrier: formValues.vendor || null,
+        carrier: formValues.carrier || null,
         consignor: {
-          name: formValues.vendor || null, // Using vendor field for consignor name
-          city: formValues.origin || null,
+          name: formValues.consignorName || null,
+          city: formValues.consignorCity || null,
         },
         consignee: {
-          name: "", // Not collected in form - consider adding this field
-          city: formValues.destination || null,
+          name: formValues.consigneeName || null,
+          city: formValues.consigneeCity || null,
         },
-        lineItems: [
-          // Base freight line (always present)
-          {
-            qty: 1,
-            description: "Base Freight",
-            unitPrice: parseFloat(formValues.totalAmount) - parseFloat(formValues.lineItem2Amount || "0"),
-            lineTotal: parseFloat(formValues.totalAmount) - parseFloat(formValues.lineItem2Amount || "0"),
-          },
-          // Additional line items from form
-          ...(formValues.lineItem2Desc ? [{
-            qty: 1,
-            description: formValues.lineItem2Desc,
-            unitPrice: parseFloat(formValues.lineItem2Amount || "0"),
-            lineTotal: parseFloat(formValues.lineItem2Amount || "0"),
-            code: formValues.lineItem2Code || null, // Include the system code
-          }] : []),
-          // You can add more line items here if needed
-        ],
-        // Additional fields from form
-        bolNumber: formValues.bolNumber || null,
+        lineItems: formValues.lineItems
+          .filter(item => item.description.trim() !== "") // Only include filled items
+          .map(item => ({
+            qty: item.qty ? parseInt(item.qty) : null,
+            description: item.description || null,
+            unitPrice: item.unitPrice ? parseFloat(item.unitPrice) : null,
+            lineTotal: item.lineTotal ? parseFloat(item.lineTotal) : null,
+            code: item.code || null,
+          })),
+        subtotal: formValues.subtotal ? parseFloat(formValues.subtotal) : null,
+        salesTax: formValues.salesTax ? parseFloat(formValues.salesTax) : null,
+        total: formValues.total ? parseFloat(formValues.total) : null,
+        // Additional fields
         currency: formValues.currency || "USD",
-        // Calculated fields
-        subtotal: parseFloat(formValues.totalAmount) - (parseFloat(formValues.lineItem2Amount || "0") || 0),
-        salesTax: 0, // Default - you might want to extract this
-        total: parseFloat(formValues.totalAmount || "0"),
         status: "processed",
         uploadedAt: new Date().toISOString(),
         // Metadata
         extractionSource: "OCR",
         confidenceScore: calculateConfidenceScore(),
-        userVerified: true, // User reviewed and submitted
+        userVerified: true,
         verificationTimestamp: new Date().toISOString(),
       };
 
@@ -321,7 +386,10 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
 
       if (result.success) {
         console.log("🎉 Invoice saved successfully!");
-        onSubmit();
+        setIngestionStep("success");
+        setTimeout(() => {
+          onSubmit();
+        }, 2000);
       } else {
         throw new Error(result.message || "Save failed");
       }
@@ -348,7 +416,7 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
       if (isNaN(date.getTime())) {
         return dateString;
       }
-      return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+      return date.toISOString().split('T')[0];
     } catch {
       return dateString;
     }
@@ -361,8 +429,26 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
     if (desc.includes("security")) return "SEC";
     if (desc.includes("handling")) return "THC";
     if (desc.includes("base")) return "BAS";
+    if (desc.includes("ocean")) return "OCN";
     return "";
   };
+
+  // Calculate line total from quantity and unit price
+  const calculateLineTotal = (qty: string, unitPrice: string): string => {
+    const qtyNum = parseFloat(qty) || 0;
+    const priceNum = parseFloat(unitPrice) || 0;
+    return (qtyNum * priceNum).toFixed(2);
+  };
+
+  // Auto-calculate line total when qty or unitPrice changes
+  useEffect(() => {
+    formValues.lineItems.forEach((item, index) => {
+      if (item.qty && item.unitPrice && !item.lineTotal) {
+        const calculatedTotal = calculateLineTotal(item.qty, item.unitPrice);
+        updateLineItem(index, "lineTotal", calculatedTotal);
+      }
+    });
+  }, [formValues.lineItems]);
 
   // --- RENDER: STEP 1 - UPLOAD SCREEN ---
   if (ingestionStep === "upload") {
@@ -548,14 +634,12 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
           >
             {previewUrl ? (
               uploadedFileType === "application/pdf" ? (
-                // 👉 PDF Viewer
                 <iframe
                   src={previewUrl}
                   className="w-full h-[842px] border-0"
                   title="Invoice PDF"
                 />
               ) : (
-                // 👉 Image Viewer
                 <img
                   src={previewUrl}
                   className="w-full h-auto object-contain"
@@ -615,149 +699,195 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
                   onChange={(v) => handleCorrection("date", v)}
                 />
                 <InputWithStatus
-                  label="Vendor / Carrier"
-                  value={formValues.vendor}
-                  confidence={fieldConfidence.vendor}
-                  onFocus={() => handleFocus("vendor")}
-                  onChange={(v) => handleCorrection("vendor", v)}
+                  label="Carrier"
+                  value={formValues.carrier}
+                  confidence={fieldConfidence.carrier}
+                  onFocus={() => handleFocus("carrier")}
+                  onChange={(v) => handleCorrection("carrier", v)}
+                />
+
+              </div>
+            </div>
+
+            {/* Consignor Details */}
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 border-b border-gray-100 pb-2">
+                Consignor (Shipper)
+              </h4>
+              <div className="grid grid-cols-2 gap-6">
+                <InputWithStatus
+                  label="Consignor Name"
+                  value={formValues.consignorName}
+                  confidence={fieldConfidence.consignorName}
+                  onFocus={() => handleFocus("consignorName")}
+                  onChange={(v) => handleCorrection("consignorName", v)}
                 />
                 <InputWithStatus
-                  label="Bill of Lading (BOL)"
-                  value={formValues.bolNumber}
-                  confidence={fieldConfidence.bolNumber}
-                  onFocus={() => handleFocus("bolNumber")}
-                  onChange={(v) => handleCorrection("bolNumber", v)}
+                  label="Consignor City"
+                  value={formValues.consignorCity}
+                  confidence={fieldConfidence.consignorCity}
+                  onFocus={() => handleFocus("consignorCity")}
+                  onChange={(v) => handleCorrection("consignorCity", v)}
+                />
+              </div>
+            </div>
+
+            {/* Consignee Details */}
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 border-b border-gray-100 pb-2">
+                Consignee (Receiver)
+              </h4>
+              <div className="grid grid-cols-2 gap-6">
+                <InputWithStatus
+                  label="Consignee Name"
+                  value={formValues.consigneeName}
+                  confidence={fieldConfidence.consigneeName}
+                  onFocus={() => handleFocus("consigneeName")}
+                  onChange={(v) => handleCorrection("consigneeName", v)}
                 />
                 <InputWithStatus
-                  label="Origin Port"
-                  value={formValues.origin}
-                  confidence={fieldConfidence.origin}
-                  onFocus={() => handleFocus("origin")}
-                  onChange={(v) => handleCorrection("origin", v)}
-                />
-                <InputWithStatus
-                  label="Destination Port"
-                  value={formValues.destination}
-                  confidence={fieldConfidence.destination}
-                  onFocus={() => handleFocus("destination")}
-                  onChange={(v) => handleCorrection("destination", v)}
+                  label="Consignee City"
+                  value={formValues.consigneeCity}
+                  confidence={fieldConfidence.consigneeCity}
+                  onFocus={() => handleFocus("consigneeCity")}
+                  onChange={(v) => handleCorrection("consigneeCity", v)}
                 />
               </div>
             </div>
 
             {/* Line Items */}
             <div>
-              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 border-b border-gray-100 pb-2">
-                Line Items
-              </h4>
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider border-b border-gray-100 pb-2">
+                  Line Items
+                </h4>
+                <button
+                  onClick={addLineItem}
+                  className="text-xs bg-teal-50 text-teal-700 hover:bg-teal-100 px-3 py-1 rounded border border-teal-200 font-bold"
+                >
+                  + Add Item
+                </button>
+              </div>
 
               <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-gray-500 uppercase mb-2 px-2">
-                <div className="col-span-5">Description</div>
-                <div className="col-span-3">System Code</div>
-                <div className="col-span-3 text-right">Amount</div>
-                <div className="col-span-1 text-center">Status</div>
+                <div className="col-span-1">Qty</div>
+                <div className="col-span-4">Description</div>
+                <div className="col-span-2">Unit Price</div>
+                <div className="col-span-2">System Code</div>
+                <div className="col-span-2 text-right">Line Total</div>
+                <div className="col-span-1 text-center"></div>
               </div>
 
-              {/* Line 1 (Inferred Base Freight) */}
-              <div
-                className={`grid grid-cols-12 gap-2 items-center p-2 rounded-sm border mb-2 transition-colors ${activeField === "lineItem1"
-                  ? "border-teal-500 bg-teal-50"
-                  : "border-gray-200 bg-white hover:bg-gray-50"
-                  }`}
-                onClick={() => handleFocus("lineItem1")}
-              >
-                <div className="col-span-5 text-sm font-medium text-gray-800">
-                  Base Freight (Derived)
-                </div>
-                <div className="col-span-3">
-                  <span className="text-xs font-mono font-bold text-teal-700 bg-teal-100 px-2 py-1 rounded">
-                    BAS
-                  </span>
-                </div>
-                <div className="col-span-3 text-right font-bold text-gray-900">
-                  {(
-                    Number(formValues.totalAmount.replace(/[^0-9.-]+/g, "") || 0) -
-                    Number(formValues.lineItem2Amount.replace(/[^0-9.-]+/g, "") || 0)
-                  ).toFixed(2)}
-                </div>
-                <div className="col-span-1 flex justify-center">
-                  <div className="w-2.5 h-2.5 rounded-full bg-teal-500"></div>
-                </div>
-              </div>
-
-              {/* Line 2 (Extracted Accessorials) */}
-              <div
-                className={`grid grid-cols-12 gap-2 items-center p-2 rounded-sm border mb-2 transition-colors cursor-pointer
-                   ${fieldConfidence.lineItem2 === "low"
-                    ? "border-amber-400 bg-amber-50"
-                    : "border-teal-200 bg-teal-50"
-                  }
-                   ${activeField === "lineItem2" ? "ring-1 ring-amber-500" : ""}
-                 `}
-                onClick={() => handleFocus("lineItem2")}
-              >
-                <div className="col-span-5">
-                  <input
-                    type="text"
-                    value={formValues.lineItem2Desc}
-                    placeholder="Accessorial (e.g. BAF, Fuel)"
-                    onChange={(e) =>
-                      handleCorrection("lineItem2Desc", e.target.value)
+              {formValues.lineItems.map((item, index) => (
+                <div
+                  key={index}
+                  className={`grid grid-cols-12 gap-2 items-center p-2 rounded-sm border mb-2 transition-colors cursor-pointer
+                    ${fieldConfidence.lineItems === "low"
+                      ? "border-amber-400 bg-amber-50"
+                      : "border-teal-200 bg-teal-50"
                     }
-                    className={`w-full text-sm font-medium bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItem2 === "low"
-                      ? "border-amber-500 text-amber-900"
-                      : "border-teal-500 text-teal-900"
-                      }`}
-                  />
-                </div>
-                <div className="col-span-3">
-                  <div className="relative">
+                    ${activeField === `lineItem-${index}` ? "ring-1 ring-amber-500" : ""}
+                  `}
+                  onClick={() => handleFocus(`lineItem-${index}`)}
+                >
+                  <div className="col-span-1">
+                    <input
+                      type="text"
+                      value={item.qty}
+                      placeholder="1"
+                      onChange={(e) => updateLineItem(index, "qty", e.target.value)}
+                      className={`w-full text-sm text-center font-medium bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItems === "low"
+                        ? "border-amber-500 text-amber-900"
+                        : "border-teal-500 text-teal-900"
+                        }`}
+                    />
+                  </div>
+                  <div className="col-span-4">
+                    <input
+                      type="text"
+                      value={item.description}
+                      placeholder="Item description"
+                      onChange={(e) => updateLineItem(index, "description", e.target.value)}
+                      className={`w-full text-sm font-medium bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItems === "low"
+                        ? "border-amber-500 text-amber-900"
+                        : "border-teal-500 text-teal-900"
+                        }`}
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <input
+                      type="text"
+                      value={item.unitPrice}
+                      placeholder="0.00"
+                      onChange={(e) => updateLineItem(index, "unitPrice", e.target.value)}
+                      className={`w-full text-sm font-medium bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItems === "low"
+                        ? "border-amber-500 text-amber-900"
+                        : "border-teal-500 text-teal-900"
+                        }`}
+                    />
+                  </div>
+                  <div className="col-span-2">
                     <select
-                      value={formValues.lineItem2Code}
-                      onChange={(e) =>
-                        handleCorrection("lineItem2Code", e.target.value)
-                      }
+                      value={item.code}
+                      onChange={(e) => updateLineItem(index, "code", e.target.value)}
                       className="text-xs font-mono font-bold text-gray-700 bg-white border border-gray-300 rounded px-2 py-1 w-full focus:border-teal-500 outline-none"
                     >
                       <option value="">Select Code</option>
-                      <option value="FSC">FSC (Fuel)</option>
-                      <option value="BAS">BAS (Base)</option>
+                      <option value="BAS">BAS (Base Freight)</option>
+                      <option value="FSC">FSC (Fuel Surcharge)</option>
                       <option value="SEC">SEC (Security)</option>
-                      <option value="THC">THC (Handling)</option>
+                      <option value="THC">THC (Terminal Handling)</option>
+                      <option value="OCN">OCN (Ocean Freight)</option>
                     </select>
                   </div>
+                  <div className="col-span-2 text-right">
+                    <input
+                      type="text"
+                      value={item.lineTotal}
+                      placeholder="0.00"
+                      onChange={(e) => updateLineItem(index, "lineTotal", e.target.value)}
+                      className={`w-full text-right font-bold bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItems === "low"
+                        ? "border-amber-500 text-amber-900"
+                        : "border-teal-500 text-teal-900"
+                        }`}
+                    />
+                  </div>
+                  <div className="col-span-1 flex justify-center">
+                    {formValues.lineItems.length > 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeLineItem(index);
+                        }}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="col-span-3 text-right">
-                  <input
-                    type="text"
-                    value={formValues.lineItem2Amount}
-                    placeholder="0.00"
-                    onChange={(e) =>
-                      handleCorrection("lineItem2Amount", e.target.value)
-                    }
-                    className={`w-full text-right font-bold bg-transparent border-b border-dashed focus:outline-none ${fieldConfidence.lineItem2 === "low"
-                      ? "border-amber-500 text-amber-900"
-                      : "border-teal-500 text-teal-900"
-                      }`}
-                  />
-                </div>
-                <div className="col-span-1 flex justify-center">
-                  <div
-                    className={`w-2.5 h-2.5 rounded-full ${fieldConfidence.lineItem2 === "low"
-                      ? "bg-amber-500 animate-pulse"
-                      : "bg-teal-500"
-                      }`}
-                  ></div>
-                </div>
-              </div>
+              ))}
             </div>
 
             {/* Totals */}
-            <div className="flex justify-end pt-4 border-t border-gray-100">
-              <div className="w-48 space-y-2">
-                <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-200 pt-2">
-                  <span>Total ({formValues.currency})</span>
-                  <span>{formValues.totalAmount || "0.00"}</span>
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 border-b border-gray-100 pb-2">
+                Totals
+              </h4>
+              <div className="flex justify-end">
+                <div className="w-48 space-y-2">
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Subtotal</span>
+                    <span>{formValues.subtotal || "0.00"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Sales Tax</span>
+                    <span>{formValues.salesTax || "0.00"}</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-200 pt-2">
+                    <span>Total ({formValues.currency})</span>
+                    <span>{formValues.total || "0.00"}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -766,11 +896,11 @@ export const InvoiceIngestion: React.FC<IngestionProps> = ({
       </div>
 
       {/* SUBMISSION SUCCESS OVERLAY */}
-      {isSubmitting && (
+      {ingestionStep === "success" && (
         <div className="absolute inset-0 bg-white/95 backdrop-blur-sm z-50 flex items-center justify-center animate-fadeIn">
           <div className="text-center">
-            <div className="w-20 h-20 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce">
-              <Database size={40} />
+            <div className="w-20 h-20 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center mx-auto mb-6">
+              <CheckCircle size={40} />
             </div>
             <h3 className="text-2xl font-bold text-gray-800 mb-2">
               Submission Complete
