@@ -22,11 +22,13 @@ import {
 interface InvoiceWorkbenchProps {
   invoices: Invoice[];
   onSelectInvoice: (invoice: Invoice) => void;
+  refreshTrigger?: number;
 }
 
 export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
   invoices,
   onSelectInvoice,
+  refreshTrigger,
 }) => {
   // Quick Status Filter
   const [statusFilter, setStatusFilter] = useState<
@@ -58,7 +60,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
   useEffect(() => {
     fetchInvoices();
     fetchStats();
-  }, []);
+  }, [refreshTrigger]);
 
   // Fetch invoices from API
   const fetchInvoices = async () => {
@@ -66,7 +68,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
       setLoading(true);
       const res = await fetch('http://localhost:5000/api/invoices');
       const data = await res.json();
-      
+
       if (data.success) {
         setApiInvoices(data.data);
       } else {
@@ -85,7 +87,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
     try {
       const res = await fetch('http://localhost:5000/api/invoices/stats');
       const data = await res.json();
-      
+
       if (data.success) {
         // Ensure stats have proper structure
         setStats({
@@ -236,12 +238,12 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
   const totalRejectedCount = stats.rejected || 0;
   const totalProcessedCount = stats.processed || 0;
   const totalPaidCount = stats.paid || 0;
-  
+
   const totalInvoiceCount = apiInvoices.length;
 
   // Calculate Total Value of ALL invoices
   const totalAllInvoicesValue = apiInvoices.reduce(
-    (sum: number, inv: any) => sum + (inv.total || 0), 
+    (sum: number, inv: any) => sum + (inv.total || 0),
     0
   );
 
@@ -266,7 +268,7 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
           <p className="text-2xl font-bold text-gray-800 mt-1">
             {totalInvoiceCount.toLocaleString()}
           </p>
-          <button 
+          <button
             onClick={handleRefresh}
             className="mt-2 text-xs text-gray-500 hover:text-teal-600 flex items-center"
           >
@@ -323,28 +325,26 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
               <button
                 key={f}
                 onClick={() => setStatusFilter(f as any)}
-                className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-all uppercase tracking-wide ${
-                  statusFilter === f
-                    ? "bg-white text-teal-800 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-300/50"
-                }`}
+                className={`px-4 py-1.5 text-xs font-bold rounded-sm transition-all uppercase tracking-wide ${statusFilter === f
+                  ? "bg-white text-teal-800 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-300/50"
+                  }`}
               >
                 {f === "ALL"
                   ? "Show: All"
                   : f === "EXCEPTION"
-                  ? "Exceptions"
-                  : "Approved"}
+                    ? "Exceptions"
+                    : "Approved"}
               </button>
             ))}
           </div>
           <div className="flex space-x-3">
             <button
               onClick={() => setShowFilterPanel(!showFilterPanel)}
-              className={`flex items-center space-x-2 px-4 py-2 border rounded-sm text-xs font-bold uppercase tracking-wider shadow-sm transition-colors ${
-                showFilterPanel
-                  ? "bg-teal-50 border-teal-500 text-teal-700"
-                  : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
-              }`}
+              className={`flex items-center space-x-2 px-4 py-2 border rounded-sm text-xs font-bold uppercase tracking-wider shadow-sm transition-colors ${showFilterPanel
+                ? "bg-teal-50 border-teal-500 text-teal-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                }`}
             >
               <Filter size={14} />
               <span>Filter Grid</span>
@@ -516,11 +516,10 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
                     <tr
                       key={inv._id}
                       className={`border-b border-gray-100 cursor-pointer transition-colors group
-                       ${
-                         isDuplicate
-                           ? "bg-red-50 hover:bg-red-100"
-                           : "hover:bg-teal-50/30"
-                       }
+                       ${isDuplicate
+                          ? "bg-red-50 hover:bg-red-100"
+                          : "hover:bg-teal-50/30"
+                        }
                      `}
                       onClick={() => onSelectInvoice(preparedInvoice)}
                     >
@@ -569,9 +568,8 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
                         ${(inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </td>
                       <td
-                        className={`py-4 px-6 text-right font-bold font-mono ${
-                          variance > 0 ? "text-red-600" : "text-teal-600"
-                        }`}
+                        className={`py-4 px-6 text-right font-bold font-mono ${variance > 0 ? "text-red-600" : "text-teal-600"
+                          }`}
                       >
                         {variance > 0 ? "+" : ""}${Math.abs(variance).toFixed(2)}
                       </td>
@@ -595,8 +593,8 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
                               isDuplicate
                                 ? "text-red-700 font-bold"
                                 : isGhost
-                                ? "text-amber-700 font-bold"
-                                : ""
+                                  ? "text-amber-700 font-bold"
+                                  : ""
                             }
                           >
                             {inv.reason || (isGhost ? 'Ghost Shipment' : 'Under Review')}
@@ -609,11 +607,10 @@ export const InvoiceWorkbench: React.FC<InvoiceWorkbenchProps> = ({
                             e.stopPropagation();
                             setActiveActionMenu(isMenuOpen ? null : inv._id);
                           }}
-                          className={`p-1 rounded-full transition-colors ${
-                            isMenuOpen
-                              ? "bg-teal-100 text-teal-700"
-                              : "hover:bg-gray-200 text-gray-400 hover:text-teal-600"
-                          }`}
+                          className={`p-1 rounded-full transition-colors ${isMenuOpen
+                            ? "bg-teal-100 text-teal-700"
+                            : "hover:bg-gray-200 text-gray-400 hover:text-teal-600"
+                            }`}
                         >
                           <MoreHorizontal size={18} />
                         </button>

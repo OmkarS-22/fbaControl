@@ -10,6 +10,7 @@ interface VendorPortalProps {
    onNavigate: (page: string) => void;
    onSelectInvoice: (invoice: Invoice) => void;
    onUpdateDispute: (invoiceId: string, action: 'SUBMIT_JUSTIFICATION' | 'REUPLOAD', comment?: string) => void;
+   refreshTrigger?: number;
 }
 
 interface Stats {
@@ -24,7 +25,7 @@ export const VendorPortal: React.FC<VendorPortalProps> = ({ onNavigate, onSelect
    const [searchQuery, setSearchQuery] = useState('');
    const [showSupportModal, setShowSupportModal] = useState(false);
    const [toast, setToast] = useState<{ msg: string, type: 'success' | 'info' } | null>(null);
-   const [notificationsRead, setNotificationsRead] = useState(false);
+   const [notificationsRead, setNotificatonUpdateDispute,ionsRead] = useState(false);
 
    // NEW: State for API data
    const [recentInvoices, setRecentInvoices] = useState<any[]>([]);
