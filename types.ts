@@ -6,7 +6,8 @@ export enum InvoiceStatus {
   REJECTED = 'REJECTED',
   PENDING = 'PENDING',
   PAID = 'PAID',
-  VENDOR_RESPONDED = 'VENDOR_RESPONDED' // New status
+  VENDOR_RESPONDED = 'VENDOR_RESPONDED',
+  PROCESSING = 'PROCESSING',
 }
 
 export enum MatchStatus {
@@ -26,6 +27,54 @@ export interface Dispute {
     comment?: string;
   }[];
 }
+// Add to types.ts
+// Add these to your types.ts file
+
+export interface Comment {
+  id: string;
+  text: string;
+  author: string;
+  userName: string; // Add this
+  role: string; // Add this
+  createdAt: string;
+  stepId?: string; // Add this
+  action?: string; // Add this
+  comment?: string; // Add this
+  timestamp?: string; // Add this
+  userId?: string;
+  invoiceId?: string;
+}
+
+export interface WorkflowHistoryItem {
+  id: string;
+  stepId: string; // Add this
+  stepName: string;
+  status: 'PENDING' | 'COMPLETED' | 'REJECTED' | 'APPROVED'; // Add 'APPROVED'
+  assigneeId: string; // Add this
+  assigneeName: string; // Add this
+  timestamp: string;
+  userId: string;
+  userName: string;
+  comment?: string; // Change from comments to comment
+}
+
+export interface RuntimeStep {
+  id: string;
+  stepName: string; // Add this
+  status: 'pending' | 'in-progress' | 'completed' | 'failed' | 'SKIPPED' | 'APPROVED' | 'REJECTED' | 'PENDING' | 'ACTIVE' | 'PROCESSING'; // Add all statuses
+  startTime?: string;
+  endTime?: string;
+  errorMessage?: string;
+  comments?: Comment[]; // Add this
+  comment?: string; // Add this
+  assigneeName?: string; // Add this
+  timestamp?: string; // Add this
+  isSystemStep?: boolean; // Add this
+  roleId?: string; // Add this
+  conditionType?: string; // Add this
+  conditionValue?: number; // Add this
+}
+
 
 export interface Invoice {
   id: string;
@@ -49,7 +98,7 @@ export interface Invoice {
   };
   workflowStep?: 'SCM_REVIEW' | 'TTL_APPROVAL' | 'COMPLETED' | 'REJECTED';
   assignedTo?: string;
-  
+
   // --- SOLID FEATURES ---
   tmsEstimatedAmount?: number; // The TMS "Planning" Cost
   auditAmount?: number;        // The ATLAS "Actual" Liability
@@ -57,7 +106,7 @@ export interface Invoice {
   source?: 'EDI' | 'API' | 'EMAIL' | 'MANUAL' | 'PORTAL';
   tmsMatchStatus?: 'LINKED' | 'NOT_FOUND'; // For Ghost Shipments
   sapShipmentRef?: string;
-  
+
   // Smart GL Splitter
   glSegments?: {
     code: string;

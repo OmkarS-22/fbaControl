@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Invoice, InvoiceStatus, MatchStatus, RoleDefinition, WorkflowStepConfig } from '../types';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Invoice, InvoiceStatus, MatchStatus, RoleDefinition, WorkflowStepConfig, Comment, WorkflowHistoryItem, RuntimeStep } from '../types';
 import {
   ArrowLeft, CheckCircle, XCircle, X, Check, Printer, Download,
   ShieldCheck, AlertTriangle, FileText, DollarSign,
   AlertCircle, Clock, Link as LinkIcon, Box, PieChart, Lock,
-  MessageSquare, User, Building2, Cpu, Edit2, MapPin, Package
+  MessageSquare, User, Building2, Cpu, Edit2, MapPin, Package,
+  Send, History, MessageCircle, Save
 } from 'lucide-react';
 
 interface InvoiceDetailProps {
@@ -16,62 +17,64 @@ interface InvoiceDetailProps {
   workflowConfig: WorkflowStepConfig[];
 }
 
-// Runtime Workflow Step (Hydrated with status)
-interface RuntimeStep extends WorkflowStepConfig {
-  status: 'PENDING' | 'ACTIVE' | 'APPROVED' | 'REJECTED' | 'PROCESSING' | 'SKIPPED';
-  comment?: string;
-  timestamp?: string;
-  assigneeName?: string; // Derived from Role
-}
-
-export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, onUpdateInvoice, activePersona, roles, workflowConfig }) => {
+export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({
+  invoice,
+  onBack,
+  onUpdateInvoice,
+  activePersona,
+  roles,
+  workflowConfig
+}) => {
   const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [reasonCode, setReasonCode] = useState('');
-
-  // Local state to track status for UI logic
-  const [currentInvoiceStatus, setCurrentInvoiceStatus] = useState<InvoiceStatus>(invoice.status);
-
-  // --- DYNAMIC WORKFLOW ENGINE ---
-  // Initialize steps based on the Configuration passed from App.tsx
+  const [commentInput, setCommentInput] = useState('');
+  const [currentStepComment, setCurrentStepComment] = useState('');
   const [steps, setSteps] = useState<RuntimeStep[]>([]);
+  const [workflowHistory, setWorkflowHistory] = useState<WorkflowHistoryItem[]>([]);
+  const [currentInvoiceStatus, setCurrentInvoiceStatus] = useState<InvoiceStatus>(invoice.status);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // 1. Initialize Workflow on Mount
+  // Initialize workflow with extracted data
   useEffect(() => {
-    // Determine which steps apply to this invoice
     const applicableSteps = workflowConfig.map(config => {
       let isApplicable = true;
 
-      // Check Condition - using total instead of amount
       if (config.conditionType === 'AMOUNT_GT') {
         isApplicable = invoice.total > (config.conditionValue || 0);
       } else if (config.conditionType === 'VARIANCE_GT') {
-        // Calculate variance if needed
         const variance = invoice.tmsEstimatedAmount ? invoice.total - invoice.tmsEstimatedAmount : 0;
         isApplicable = variance > (config.conditionValue || 0);
       }
 
-      // Initial Status logic
       let initialStatus: RuntimeStep['status'] = 'PENDING';
 
       if (!isApplicable) {
         initialStatus = 'SKIPPED';
       } else if (invoice.status === InvoiceStatus.APPROVED || invoice.status === InvoiceStatus.PAID) {
         initialStatus = 'APPROVED';
+      } else if (invoice.status === InvoiceStatus.REJECTED) {
+        initialStatus = 'REJECTED';
       }
 
-      // Find Role Name for Display
       const roleDef = roles.find(r => r.id === config.roleId);
+      const existingComments = invoice.comments?.filter(c => c.stepId === config.id) || [];
 
       return {
         ...config,
         status: initialStatus,
         assigneeName: roleDef ? roleDef.name : 'System',
-        timestamp: (initialStatus === 'APPROVED' ? invoice.date : undefined)
+        timestamp: (initialStatus === 'APPROVED' ? invoice.date : undefined),
+        comments: existingComments
       };
     });
 
-    // If it's a new load (not already approved), activate the first applicable step
-    if (invoice.status !== InvoiceStatus.APPROVED && invoice.status !== InvoiceStatus.PAID) {
+    // Load workflow history
+    if (invoice.workflowHistory) {
+      setWorkflowHistory(invoice.workflowHistory);
+    }
+
+    // Activate first applicable step if not already approved/paid/rejected
+    if (![InvoiceStatus.APPROVED, InvoiceStatus.PAID, InvoiceStatus.REJECTED].includes(invoice.status)) {
       const firstActiveIndex = applicableSteps.findIndex(s => s.status !== 'SKIPPED');
       if (firstActiveIndex !== -1) {
         applicableSteps[firstActiveIndex].status = 'ACTIVE';
@@ -81,33 +84,201 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
     setSteps(applicableSteps);
   }, [workflowConfig, invoice, roles]);
 
-  const handleCommentChange = (id: string, value: string) => {
-    setSteps(prev => prev.map(step => step.id === id ? { ...step, comment: value } : step));
+  // Save comments to backend API
+  const saveCommentsToAPI = async (invoiceId: string, comments: Comment[]) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/invoices/${invoiceId}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ comments }),
+      });
+
+      const result = await response.json();
+      if (!result.success) {
+        console.error('Failed to save comments:', result.message);
+      }
+      return result.success;
+    } catch (error) {
+      console.error('Error saving comments:', error);
+      return false;
+    }
   };
 
-  const finalizeStatus = (newStatus: InvoiceStatus) => {
+  // Save workflow history to backend API
+  const saveWorkflowHistoryToAPI = async (invoiceId: string, history: WorkflowHistoryItem[]) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/invoices/${invoiceId}/workflow-history`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ workflowHistory: history }),
+      });
+
+      const result = await response.json();
+      if (!result.success) {
+        console.error('Failed to save workflow history:', result.message);
+      }
+      return result.success;
+    } catch (error) {
+      console.error('Error saving workflow history:', error);
+      return false;
+    }
+  };
+
+  // Update invoice status in backend API
+  const updateInvoiceStatusInAPI = async (invoiceId: string, status: InvoiceStatus) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/invoices/${invoiceId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status }),
+      });
+
+      const result = await response.json();
+      if (!result.success) {
+        console.error('Failed to update invoice status:', result.message);
+      }
+      return result.success;
+    } catch (error) {
+      console.error('Error updating invoice status:', error);
+      return false;
+    }
+  };
+
+  const addComment = async (stepId: string, commentText: string, action?: 'APPROVED' | 'REJECTED' | 'COMMENT') => {
+    if (!commentText.trim()) return;
+
+    const newComment: Comment = {
+      id: `comment_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      userId: activePersona.id,
+      userName: activePersona.name,
+      role: activePersona.role,
+      comment: commentText.trim(),
+      timestamp: new Date().toISOString(),
+      stepId: stepId,
+      action: action || 'COMMENT'
+    };
+
+    // Update local steps
+    const updatedSteps = steps.map(step =>
+      step.id === stepId
+        ? {
+          ...step,
+          comments: [...(step.comments || []), newComment],
+          comment: '' // Clear the step comment field
+        }
+        : step
+    );
+
+    setSteps(updatedSteps);
+
+    // Update the invoice locally
+    const updatedInvoice: Invoice = {
+      ...invoice,
+      comments: [...(invoice.comments || []), newComment],
+      updatedAt: new Date().toISOString()
+    };
+
+    // Save comment to API
+    setIsSaving(true);
+    const success = await saveCommentsToAPI(invoice.id, [newComment]);
+    setIsSaving(false);
+
+    if (success) {
+      onUpdateInvoice(updatedInvoice);
+    }
+
+    // Clear input
+    if (action !== 'APPROVED' && action !== 'REJECTED') {
+      setCommentInput('');
+    }
+    setCurrentStepComment('');
+  };
+
+ const updateInvoiceStatus = async (newStatus: InvoiceStatus, stepId?: string, stepComment?: string) => {
+    const now = new Date().toISOString();
+
+    // UPDATE LOCAL STATE IMMEDIATELY for instant UI feedback
     setCurrentInvoiceStatus(newStatus);
-    onUpdateInvoice({ ...invoice, status: newStatus });
+
+    // Create workflow history item if stepId provided
+    if (stepId) {
+      const step = steps.find(s => s.id === stepId);
+      const historyItem: WorkflowHistoryItem = {
+        stepId,
+        stepName: step?.stepName || 'Unknown Step',
+        status: newStatus === InvoiceStatus.REJECTED ? 'REJECTED' : 'APPROVED',
+        assigneeId: activePersona.id,
+        assigneeName: activePersona.name,
+        timestamp: now,
+        comment: stepComment
+      };
+
+      const updatedHistory = [...workflowHistory, historyItem];
+      setWorkflowHistory(updatedHistory);
+
+      // Save workflow history to API
+      await saveWorkflowHistoryToAPI(invoice.id, updatedHistory);
+
+      // Add comment to step if provided
+      if (stepComment) {
+        await addComment(stepId, stepComment, newStatus === InvoiceStatus.REJECTED ? 'REJECTED' : 'APPROVED');
+      }
+    }
+
+    // Update invoice status in API
+    await updateInvoiceStatusInAPI(invoice.id, newStatus);
+
+    // Update the invoice locally and notify parent
+    const updatedInvoice: Invoice = {
+      ...invoice,
+      status: newStatus,
+      updatedAt: now,
+      workflowHistory: workflowHistory,
+      lastUpdatedBy: {
+        userId: activePersona.id,
+        userName: activePersona.name,
+        role: activePersona.role,
+        timestamp: now
+      }
+    };
+
+    onUpdateInvoice(updatedInvoice);
   };
 
-  const handleDecision = (stepId: string, decision: 'APPROVE' | 'REJECT') => {
+  const handleDecision = async (stepId: string, decision: 'APPROVE' | 'REJECT') => {
+    const step = steps.find(s => s.id === stepId);
+    const comment = currentStepComment || step?.comment || '';
     const now = new Date().toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
 
     if (decision === 'REJECT') {
-      setSteps(prev => prev.map(step =>
+      const updatedSteps = steps.map(step =>
         step.id === stepId ? { ...step, status: 'REJECTED', timestamp: now } : step
-      ));
-      finalizeStatus(InvoiceStatus.REJECTED);
+      );
+      setSteps(updatedSteps);
+      await updateInvoiceStatus(InvoiceStatus.REJECTED, stepId, comment);
+      setCurrentStepComment('');
       return;
     }
 
-    // Approve current step
+    // IMMEDIATELY update UI to show PROCESSING
+    setCurrentInvoiceStatus(InvoiceStatus.PROCESSING);
+    
+    // Approve current step - FIRST set status to PROCESSING
     let nextStepIndex = -1;
-
     const newSteps = steps.map((step, index) => {
       if (step.id === stepId) {
-        nextStepIndex = index + 1; // Potential next step
-        return { ...step, status: 'APPROVED', timestamp: now } as RuntimeStep;
+        nextStepIndex = index + 1;
+        return {
+          ...step,
+          status: 'APPROVED',
+          timestamp: now,
+        };
       }
       return step;
     });
@@ -124,39 +295,135 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
 
     setSteps(newSteps);
 
+    // If no next step found, invoice is fully approved
     if (!foundNext) {
-      finalizeStatus(InvoiceStatus.APPROVED);
+      // Set invoice status to APPROVED
+      await updateInvoiceStatus(InvoiceStatus.APPROVED, stepId, comment);
+    } else {
+      // Set invoice status to PROCESSING while next step is active
+      await updateInvoiceStatus(InvoiceStatus.PROCESSING, stepId, comment);
     }
+
+    setCurrentStepComment('');
   };
 
   // Auto-process System Steps
   useEffect(() => {
     const processingStep = steps.find(s => s.status === 'PROCESSING' && s.isSystemStep);
     if (processingStep) {
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         const now = new Date().toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
-        setSteps(prev => prev.map(step =>
+        const updatedSteps = steps.map(step =>
           step.id === processingStep.id
-            ? { ...step, status: 'APPROVED', comment: 'Posted to SAP S/4HANA successfully.', timestamp: now }
+            ? {
+              ...step,
+              status: 'APPROVED',
+              comment: 'System processed successfully',
+              timestamp: now
+            }
             : step
-        ));
-        finalizeStatus(InvoiceStatus.APPROVED);
-      }, 2500); // Simulate API latency
+        );
+        setSteps(updatedSteps);
+        await updateInvoiceStatus(InvoiceStatus.APPROVED, processingStep.id, 'System processed successfully');
+      }, 2500);
       return () => clearTimeout(timer);
     }
   }, [steps]);
 
-  // Calculate variance for display
   const variance = useMemo(() => {
     return invoice.tmsEstimatedAmount ? invoice.total - invoice.tmsEstimatedAmount : 0;
   }, [invoice.total, invoice.tmsEstimatedAmount]);
 
-  // Calculate extraction confidence if not present
-  const extractionConfidence = invoice.extractionConfidence || 92; // Default value
+  const extractionConfidence = invoice.extractionConfidence || 92;
 
-  // --------------------------------------------------------------------------------
-  // STANDARD DETAIL VIEW (PDF Split)
-  // --------------------------------------------------------------------------------
+  // Helper function to render comment thread
+  const renderCommentThread = (step: RuntimeStep) => {
+    const allComments = [...(step.comments || [])];
+
+    return (
+      <div className="mt-4 border-t border-gray-100 pt-4">
+        <div className="flex items-center justify-between mb-3">
+          <h5 className="text-xs font-bold text-gray-500 uppercase flex items-center">
+            <MessageCircle size={12} className="mr-2" /> Discussion
+          </h5>
+          <span className="text-xs text-gray-400">{allComments.length} comment{allComments.length !== 1 ? 's' : ''}</span>
+        </div>
+
+        <div className="space-y-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+          {allComments.length === 0 ? (
+            <div className="text-xs text-gray-400 italic py-2">No comments yet. Start the discussion...</div>
+          ) : (
+            allComments.map((comment, idx) => (
+              <div key={comment.id || idx} className="bg-gray-50 rounded-sm p-3">
+                <div className="flex justify-between items-start mb-1">
+                  <div className="flex items-center">
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center mr-2 text-xs font-bold
+                      ${comment.role?.includes('Manager') ? 'bg-purple-100 text-purple-700' :
+                        comment.role?.includes('Account') ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'}`}
+                    >
+                      {comment.userName?.charAt(0) || 'U'}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-gray-800">{comment.userName}</p>
+                      <p className="text-[10px] text-gray-500">{comment.role}</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-gray-400">
+                    {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-700 mt-2">{comment.comment}</p>
+                {comment.action && comment.action !== 'COMMENT' && (
+                  <div className={`inline-flex items-center text-[10px] font-bold px-2 py-0.5 rounded-sm mt-2
+                    ${comment.action === 'APPROVED' ? 'bg-teal-100 text-teal-700' :
+                      comment.action === 'REJECTED' ? 'bg-red-100 text-red-700' :
+                        'bg-gray-100 text-gray-700'}`}
+                  >
+                    {comment.action === 'APPROVED' ? '✓ Approved' :
+                      comment.action === 'REJECTED' ? '✗ Rejected' :
+                        'System'}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="mt-3 flex items-center space-x-2">
+          <input
+            type="text"
+            value={commentInput}
+            onChange={(e) => setCommentInput(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && commentInput.trim()) {
+                addComment(step.id, commentInput);
+              }
+            }}
+            placeholder="Add a comment..."
+            className="flex-1 text-sm border border-gray-300 rounded-sm px-3 py-2 focus:outline-none focus:border-teal-500"
+            disabled={isSaving}
+          />
+          <button
+            onClick={() => {
+              if (commentInput.trim()) {
+                addComment(step.id, commentInput);
+              }
+            }}
+            disabled={!commentInput.trim() || isSaving}
+            className="bg-teal-600 text-white p-2 rounded-sm hover:bg-teal-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+          >
+            {isSaving ? (
+              <Clock size={16} className="animate-spin" />
+            ) : (
+              <Send size={16} />
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderStandardDetail = () => {
     return (
       <div className="flex flex-1 overflow-hidden">
@@ -178,7 +445,7 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
           <div className="flex-1 overflow-y-auto p-8 flex justify-center custom-scrollbar">
             <div className="bg-white shadow-lg w-full max-w-[595px] min-h-[842px] p-10 text-xs font-mono text-gray-800 relative">
               <div className="absolute top-10 right-10 border-4 border-red-600 text-red-600 font-bold text-xl px-4 py-2 opacity-30 transform -rotate-12 pointer-events-none">
-                {invoice.status?.toUpperCase() || 'PROCESSED'}
+                {currentInvoiceStatus?.toUpperCase() || invoice.status?.toUpperCase() || 'PROCESSED'}
               </div>
 
               <div className="flex justify-between border-b-2 border-black pb-4 mb-8">
@@ -255,8 +522,8 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
               </div>
 
               <div className="text-center text-gray-400 text-[10px] mt-auto">
-                <p>Uploaded: {new Date(invoice.uploadedAt).toLocaleDateString()}</p>
-                <p>File ID: {invoice.fileId?.substring(0, 12)}...</p>
+                <p>Status: <span className="font-bold">{currentInvoiceStatus || invoice.status}</span></p>
+                <p>Last Updated: {new Date(invoice.updatedAt || invoice.uploadedAt).toLocaleDateString()}</p>
               </div>
             </div>
           </div>
@@ -270,7 +537,7 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
               Extracted Data & Audit Results
             </h2>
             <p className="text-xs text-gray-500 mt-1 ml-6">AI Extraction Confidence: <span className="text-teal-600 font-bold">{extractionConfidence}%</span></p>
-            <p className="text-xs text-gray-500 mt-1 ml-6">Invoice Status: <span className="font-bold">{invoice.status}</span></p>
+            <p className="text-xs text-gray-500 mt-1 ml-6">Invoice Status: <span className="font-bold">{currentInvoiceStatus || invoice.status}</span></p>
           </div>
 
           <div className="p-8 space-y-8">
@@ -388,49 +655,35 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
               </div>
             </div>
 
-            {/* --- SOLID FEATURE: DUAL-RATING ENGINE --- */}
-            {invoice.tmsEstimatedAmount && (
-              <div className="bg-slate-50 border border-slate-200 rounded-sm p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Freight Rating Audit (Dual-Rating)</h3>
-                  {invoice.tmsMatchStatus === 'NOT_FOUND' && (
-                    <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded border border-red-200 font-bold uppercase">Ghost Shipment</span>
-                  )}
+            {/* Workflow History */}
+            {workflowHistory.length > 0 && (
+              <div className="bg-white border border-gray-200 rounded-sm p-4">
+                <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center">
+                  <History size={14} className="mr-2" /> Workflow History
+                </h4>
+                <div className="space-y-2">
+                  {workflowHistory.map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
+                      <div className="flex items-center">
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center mr-2
+                          ${item.status === 'APPROVED' ? 'bg-teal-100 text-teal-700' : 'bg-red-100 text-red-700'}`}
+                        >
+                          {item.status === 'APPROVED' ? <Check size={14} /> : <X size={14} />}
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-gray-800">{item.stepName}</p>
+                          <p className="text-xs text-gray-500">by {item.assigneeName}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-gray-400">{item.timestamp}</p>
+                        {item.comment && (
+                          <p className="text-xs text-gray-600 italic">"{item.comment}"</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200">
-                      <th className="text-left py-2 font-bold text-slate-600">Source</th>
-                      <th className="text-right py-2 font-bold text-slate-600">Rate</th>
-                      <th className="text-right py-2 font-bold text-slate-600">Variance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td className="py-2 text-slate-500 font-medium">1. TMS Planning (Est.)</td>
-                      <td className="py-2 text-right font-mono text-slate-500 italic">
-                        ${invoice.tmsEstimatedAmount?.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-2 text-right font-mono text-slate-400">-</td>
-                    </tr>
-                    <tr className="bg-white border-b border-gray-100">
-                      <td className="py-2 pl-2 text-slate-800 font-bold border-l-4 border-teal-500">2. ATLAS Audit (Contract)</td>
-                      <td className="py-2 text-right font-mono text-slate-800 font-bold">
-                        ${(invoice.auditAmount || invoice.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-2 text-right font-mono text-slate-400">0.00</td>
-                    </tr>
-                    <tr>
-                      <td className="py-2 text-slate-700 font-medium">3. Carrier Billed</td>
-                      <td className="py-2 text-right font-mono text-slate-600">
-                        ${invoice.total?.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className={`py-2 text-right font-mono font-bold ${variance > 0 ? 'text-red-600' : 'text-teal-600'}`}>
-                        {variance > 0 ? '+' : ''}${variance.toFixed(2)}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
               </div>
             )}
 
@@ -446,7 +699,6 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
                 {steps.map((step, idx) => {
                   if (step.status === 'SKIPPED') return null;
 
-                  // RBAC Logic: Can current user approve this step?
                   const userRoleDef = roles.find(r => r.id === activePersona.roleId);
                   const canAct = step.roleId === activePersona.roleId || (userRoleDef?.permissions.canAdminSystem);
 
@@ -479,8 +731,25 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
                             <p className="text-sm font-bold text-gray-900">{step.stepName}</p>
                             <p className="text-xs text-gray-500">{step.assigneeName}</p>
                           </div>
-                          {step.timestamp && <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{step.timestamp}</span>}
-                          {isLocked && <Lock size={14} className="text-gray-400" />}
+                          <div className="flex items-center space-x-2">
+                            {step.timestamp && <span className="text-[10px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{step.timestamp}</span>}
+                            {isLocked && <Lock size={14} className="text-gray-400" />}
+                            {step.status === 'APPROVED' && (
+                              <span className="text-[10px] bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded font-bold">
+                                APPROVED
+                              </span>
+                            )}
+                            {step.status === 'REJECTED' && (
+                              <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
+                                REJECTED
+                              </span>
+                            )}
+                            {isSaving && (
+                              <span className="text-[10px] bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded font-bold flex items-center">
+                                <Clock size={10} className="mr-1 animate-spin" /> Saving...
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {/* Actions if Active */}
@@ -491,19 +760,28 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
                                 <textarea
                                   className="w-full text-xs p-2 border border-gray-300 rounded-sm mb-2 focus:border-blue-500 focus:outline-none"
                                   placeholder="Add approval comment..."
-                                  value={step.comment || ''}
-                                  onChange={(e) => handleCommentChange(step.id, e.target.value)}
+                                  value={currentStepComment}
+                                  onChange={(e) => setCurrentStepComment(e.target.value)}
+                                  disabled={isSaving}
                                 ></textarea>
                                 <div className="flex space-x-2">
                                   <button
                                     onClick={() => handleDecision(step.id, 'APPROVE')}
-                                    className="flex-1 bg-teal-600 text-white text-xs font-bold py-1.5 rounded-sm hover:bg-teal-700 transition-colors"
+                                    disabled={isSaving}
+                                    className="flex-1 bg-teal-600 text-white text-xs font-bold py-1.5 rounded-sm hover:bg-teal-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                                   >
-                                    Approve
+                                    {isSaving ? (
+                                      <>
+                                        <Clock size={12} className="mr-2 animate-spin" /> Processing...
+                                      </>
+                                    ) : (
+                                      'Approve'
+                                    )}
                                   </button>
                                   <button
                                     onClick={() => handleDecision(step.id, 'REJECT')}
-                                    className="flex-1 bg-white border border-red-200 text-red-600 text-xs font-bold py-1.5 rounded-sm hover:bg-red-50 transition-colors"
+                                    disabled={isSaving}
+                                    className="flex-1 bg-white border border-red-200 text-red-600 text-xs font-bold py-1.5 rounded-sm hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                   >
                                     Reject
                                   </button>
@@ -516,26 +794,26 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
                               </div>
                             )}
                           </div>
-                        ) : (
-                          step.comment && (
-                            <div className="bg-gray-50 p-2 rounded-sm text-xs text-gray-600 italic border border-gray-100">
-                              "{step.comment}"
-                            </div>
-                          )
-                        )}
+                        ) : step.comment ? (
+                          <div className="bg-gray-50 p-2 rounded-sm text-xs text-gray-600 italic border border-gray-100">
+                            "{step.comment}"
+                          </div>
+                        ) : null}
 
                         {step.status === 'PROCESSING' && (
                           <div className="mt-2 text-xs text-purple-600 flex items-center font-bold">
                             <Clock size={12} className="mr-1 animate-spin" /> Processing Automation...
                           </div>
                         )}
+
+                        {/* Comment Thread */}
+                        {renderCommentThread(step)}
                       </div>
                     </div>
                   );
                 })}
               </div>
             </div>
-
           </div>
         </div>
       </div>
@@ -557,11 +835,12 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
               {currentInvoiceStatus === InvoiceStatus.EXCEPTION && <span className="bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded border border-red-200">EXCEPTION</span>}
               {currentInvoiceStatus === InvoiceStatus.REJECTED && <span className="bg-gray-200 text-gray-700 text-xs font-bold px-2 py-0.5 rounded border border-gray-300">REJECTED</span>}
               {currentInvoiceStatus === InvoiceStatus.VENDOR_RESPONDED && <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded border border-blue-200">VENDOR RESPONDED</span>}
+              {currentInvoiceStatus === InvoiceStatus.PROCESSING && <span className="bg-purple-100 text-purple-700 text-xs font-bold px-2 py-0.5 rounded border border-purple-200">PROCESSING</span>}
               {invoice.status === 'processed' && <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded border border-blue-200">PROCESSED</span>}
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
-              {invoice.carrier} • 
-              {invoice.consignor?.city && ` ${invoice.consignor.city}`} to 
+              {invoice.carrier} •
+              {invoice.consignor?.city && ` ${invoice.consignor.city}`} to
               {invoice.consignee?.city && ` ${invoice.consignee.city}`}
             </p>
           </div>
@@ -615,9 +894,9 @@ export const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, onBack, o
               <div className="flex justify-end space-x-3">
                 <button onClick={() => setShowUnlockModal(false)} className="px-4 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-sm">Cancel</button>
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (reasonCode) {
-                      finalizeStatus(InvoiceStatus.APPROVED);
+                      await updateInvoiceStatus(InvoiceStatus.APPROVED);
                       setShowUnlockModal(false);
                     }
                   }}
